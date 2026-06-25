@@ -19,5 +19,6 @@ FROM scratch
 COPY --from=build /out/bin/massless /
 COPY posts /posts
 COPY public /public
+USER 65532:65532
 EXPOSE 8420
 CMD ["/massless"]
