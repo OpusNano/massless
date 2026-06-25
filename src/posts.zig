@@ -1,5 +1,6 @@
 const std = @import("std");
 const Io = std.Io;
+const config = @import("config.zig");
 const markdown = @import("markdown.zig");
 
 pub const PostTimestamp = struct {
@@ -213,7 +214,15 @@ pub fn scanAndRender(allocator: std.mem.Allocator, io: std.Io) !Index {
         else
             try std.fmt.allocPrint(aa, "{d:0>4}-{d:0>2}-{d:0>2}", .{ ts.year, ts.month, ts.day });
 
-        const content = dir.readFileAlloc(io, entry.name, aa, .unlimited) catch |err| {
+        const stat = dir.statFile(io, entry.name, .{}) catch |err| {
+            std.log.err("statFile failed for {s}: {s}", .{ entry.name, @errorName(err) });
+            continue;
+        };
+        if (stat.size > config.max_post_bytes) {
+            std.log.warn("post {s} too large ({d} > {d}), skipping", .{ entry.name, stat.size, config.max_post_bytes });
+            continue;
+        }
+        const content = dir.readFileAlloc(io, entry.name, aa, Io.Limit.limited(config.max_post_bytes)) catch |err| {
             std.log.err("failed to read {s}: {s}", .{ entry.name, @errorName(err) });
             continue;
         };
