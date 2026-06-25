@@ -79,7 +79,8 @@ Safe schemes (`http`, `https`, `mailto`) and relative paths are allowed.
 
 ## HTTP
 
-Only GET and HEAD methods are accepted. All others return 405.
+Only GET and HEAD methods are accepted. All others return 405 and
+the connection is closed immediately (body is not read).
 Query strings are stripped before routing. HTML responses include:
 
 - `Content-Security-Policy` (script-src depends on hot_reload mode)

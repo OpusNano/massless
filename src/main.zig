@@ -169,8 +169,10 @@ fn handleSSE(stream: net.Stream, io: Io) void {
 
     while (true) {
         w.writeAll(": keepalive\n") catch break;
+        _ = w.flush() catch break;
         if (hotreload.check()) {
             w.writeAll("data: reload\n\n") catch break;
+            _ = w.flush() catch break;
             break;
         }
         if (sse_snapshot.refresh(io) catch false) {
@@ -238,15 +240,9 @@ pub fn main() !void {
             const route = match(target_path);
 
             if (request.head.method != .GET and request.head.method != .HEAD) {
-                _ = request.respond("", .{
-                    .status = .method_not_allowed,
-                    .extra_headers = &.{
-                        .{ .name = "content-type", .value = "text/html" },
-                        .{ .name = "x-content-type-options", .value = "nosniff" },
-                        .{ .name = "referrer-policy", .value = "no-referrer" },
-                    },
-                }) catch {};
-                continue;
+                _ = server.out.writeAll("HTTP/1.1 405 Method Not Allowed\r\nContent-Type: text/html\r\nX-Content-Type-Options: nosniff\r\nReferrer-Policy: no-referrer\r\nContent-Length: 0\r\nConnection: close\r\n\r\n") catch {};
+                _ = server.out.flush() catch {};
+                break;
             }
 
             if (config.hot_reload and route == .events) {
