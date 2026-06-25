@@ -45,22 +45,7 @@ fn mimeType(path: []const u8) []const u8 {
 
 fn handleRoute(route: Route, index: *const posts_mod.Index, hot_reload: bool, io: Io, aa: std.mem.Allocator) !Response {
     switch (route) {
-        .home => {
-            var list = std.ArrayListAligned(u8, null){ .items = &.{}, .capacity = 0 };
-            defer list.deinit(aa);
-            const limit = @min(@as(usize, 5), index.posts.len);
-            for (index.posts[0..limit]) |p| {
-                const item = try template.postListItem(p.slug, p.title, p.date, aa);
-                try list.appendSlice(aa, item);
-                aa.free(item);
-            }
-            return Response{
-                .body = try template.home(list.items, config.site_title, config.hot_reload, aa),
-                .status = .ok,
-                .content_type = "text/html",
-            };
-        },
-        .posts_list => {
+        .home, .posts_list => {
             var list = std.ArrayListAligned(u8, null){ .items = &.{}, .capacity = 0 };
             defer list.deinit(aa);
             for (index.posts) |p| {
@@ -69,7 +54,7 @@ fn handleRoute(route: Route, index: *const posts_mod.Index, hot_reload: bool, io
                 aa.free(item);
             }
             return Response{
-                .body = try template.home(list.items, "Archive — " ++ config.site_title, config.hot_reload, aa),
+                .body = try template.home(list.items, config.site_title, config.hot_reload, aa),
                 .status = .ok,
                 .content_type = "text/html",
             };
@@ -241,6 +226,18 @@ pub fn main() !void {
                 sse_thread.detach();
                 sse_detached = true;
                 break;
+            }
+
+            if (route == .posts_list) {
+                request.respond("", .{
+                    .status = .see_other,
+                    .extra_headers = &.{
+                        .{ .name = "location", .value = "/" },
+                    },
+                }) catch |err| {
+                    std.log.err("redirect respond failed: {s}", .{@errorName(err)});
+                };
+                continue;
             }
 
             _ = arena.reset(.retain_capacity);
