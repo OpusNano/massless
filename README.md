@@ -1,5 +1,7 @@
 # massless
 
+v0.1.0
+
 Zero-dependency blog server — Zig stdlib only. Serves Markdown posts as HTML with
 optional hot-reload SSE. Single static binary, fits in a `FROM scratch` Docker image.
 
