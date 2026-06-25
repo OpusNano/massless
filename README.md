@@ -75,6 +75,20 @@ blocked. Max file size: 2 MiB. Oversized or unreadable files return 404.
 - Thematic breaks (`---`)
 
 HTML is escaped. Unsafe URL protocols (`javascript:`, `data:`, `vbscript:`) are blocked.
+Safe schemes (`http`, `https`, `mailto`) and relative paths are allowed.
+
+## HTTP
+
+Only GET and HEAD methods are accepted. All others return 405.
+Query strings are stripped before routing. HTML responses include:
+
+- `Content-Security-Policy` (script-src depends on hot_reload mode)
+- `X-Content-Type-Options: nosniff`
+- `Referrer-Policy: no-referrer`
+
+## License
+
+MIT
 
 ## Configuration
 
