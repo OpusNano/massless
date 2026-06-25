@@ -29,13 +29,12 @@ article time {
 
 a {
     color: inherit;
-    text-decoration: underline;
-    text-decoration-color: #999;
-    text-underline-offset: 2px;
+    text-decoration: none;
+    border-bottom: 1px solid #777;
 }
 
 a:hover {
-    text-decoration-color: currentColor;
+    border-bottom-color: currentColor;
 }
 
 code {
@@ -67,11 +66,11 @@ pre {
     }
 
     a {
-        text-decoration-color: #666;
+        border-bottom-color: #555;
     }
 
     a:hover {
-        text-decoration-color: currentColor;
+        border-bottom-color: currentColor;
     }
 
     code,
