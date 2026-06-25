@@ -25,6 +25,11 @@ pub fn build(b: *std.Build) void {
 
     const test_step = b.step("test", "Run unit tests");
 
+    const integ_test = b.addSystemCommand(&.{ "sh", "tools/integration_test.sh" });
+    integ_test.step.dependOn(b.getInstallStep());
+    const integ_step = b.step("integration", "Run integration tests (curl, SSE)");
+    integ_step.dependOn(&integ_test.step);
+
     const test_files = [_][]const u8{ "src/main.zig", "src/posts.zig", "src/template.zig", "src/markdown.zig" };
     for (test_files) |tf| {
         const tm = b.createModule(.{

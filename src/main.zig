@@ -58,9 +58,21 @@ fn isSafeRelPath(path: []const u8) bool {
     return true;
 }
 
+fn isSafeSlug(slug: []const u8) bool {
+    if (slug.len == 0) return false;
+    for (slug) |ch| {
+        if (ch >= 'a' and ch <= 'z') continue;
+        if (ch >= '0' and ch <= '9') continue;
+        if (ch == '-') continue;
+        return false;
+    }
+    return true;
+}
+
 fn handleRoute(route: Route, index: *const posts_mod.Index, hot_reload: bool, io: Io, aa: std.mem.Allocator) !Response {
     switch (route) {
-        .home, .posts_list => {
+        .posts_list => unreachable, // ponytail: redirected before handleRoute, keep for exhaustiveness
+        .home => {
             var list = std.ArrayListAligned(u8, null){ .items = &.{}, .capacity = 0 };
             defer list.deinit(aa);
             for (index.posts) |p| {
@@ -75,6 +87,13 @@ fn handleRoute(route: Route, index: *const posts_mod.Index, hot_reload: bool, io
             };
         },
         .post => |slug| {
+            if (!isSafeSlug(slug)) {
+                return Response{
+                    .body = try template.notFound(aa),
+                    .status = .not_found,
+                    .content_type = "text/html",
+                };
+            }
             for (index.posts) |p| {
                 if (std.mem.eql(u8, p.slug, slug)) {
                     return Response{
@@ -267,6 +286,8 @@ pub fn main() !void {
                 continue;
             }
 
+            // ponytail: retain_capacity keeps peak low under bounded post/public sizes;
+            // switch to .free_all only if long-running memory retention is observed.
             _ = arena.reset(.retain_capacity);
             const aa = arena.allocator();
 
@@ -380,4 +401,46 @@ test "isSafeRelPath: blocks trailing slash" {
 
 test "isSafeRelPath: blocks NUL" {
     try std.testing.expect(!isSafeRelPath("a\x00b"));
+}
+
+test "isSafeSlug: allows simple slug" {
+    try std.testing.expect(isSafeSlug("hello-world"));
+    try std.testing.expect(isSafeSlug("post-2024-01-01"));
+    try std.testing.expect(isSafeSlug("a"));
+}
+
+test "isSafeSlug: allows numeric slug" {
+    try std.testing.expect(isSafeSlug("123"));
+    try std.testing.expect(isSafeSlug("post-123"));
+}
+
+test "isSafeSlug: rejects empty" {
+    try std.testing.expect(!isSafeSlug(""));
+}
+
+test "isSafeSlug: rejects slash" {
+    try std.testing.expect(!isSafeSlug("foo/bar"));
+    try std.testing.expect(!isSafeSlug("/hello"));
+    try std.testing.expect(!isSafeSlug("hello/"));
+}
+
+test "isSafeSlug: rejects dot" {
+    try std.testing.expect(!isSafeSlug(".."));
+    try std.testing.expect(!isSafeSlug("hello.world"));
+}
+
+test "isSafeSlug: rejects percent" {
+    try std.testing.expect(!isSafeSlug("%2e%2e"));
+    try std.testing.expect(!isSafeSlug("a%00b"));
+}
+
+test "isSafeSlug: rejects uppercase" {
+    try std.testing.expect(!isSafeSlug("Hello-World"));
+    try std.testing.expect(!isSafeSlug("HELLO"));
+}
+
+test "isSafeSlug: rejects control chars" {
+    try std.testing.expect(!isSafeSlug("a\x00b"));
+    try std.testing.expect(!isSafeSlug("a\x01b"));
+    try std.testing.expect(!isSafeSlug("a\x7fb"));
 }
