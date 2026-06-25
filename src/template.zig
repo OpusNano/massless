@@ -38,7 +38,7 @@ pub fn home(content: []const u8, page_title: []const u8, hot_reload: bool, alloc
         \\<link rel="stylesheet" href="/public/style.css">
         \\{s}</head>
         \\<body>
-        \\<header><a href="/">{s}</a> &mdash; <a href="/posts">archive</a></header>
+        \\<header><a href="/">{s}</a></header>
         \\<main>
         \\{s}
         \\</main>
@@ -94,4 +94,27 @@ test "home escapes page title" {
     defer alloc.free(result);
     try std.testing.expect(std.mem.indexOf(u8, result, "&lt;script&gt;") != null);
     try std.testing.expect(std.mem.indexOf(u8, result, "<script>") == null);
+}
+
+test "postListItem date and title same line" {
+    const alloc = std.testing.allocator;
+    const result = try postListItem("slug", "Title", "2026-01-01", alloc);
+    defer alloc.free(result);
+    try std.testing.expect(std.mem.indexOf(u8, result, "<time>2026-01-01</time> <a") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "</article>") != null);
+}
+
+test "home header contains site title link, no archive link" {
+    const alloc = std.testing.allocator;
+    const result = try home("body", "Page", false, alloc);
+    defer alloc.free(result);
+    try std.testing.expect(std.mem.indexOf(u8, result, "href=\"/\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "archive") == null);
+}
+
+test "postListItem renders timestamped display date" {
+    const alloc = std.testing.allocator;
+    const result = try postListItem("slug", "Title", "2026-06-25 14:03:09", alloc);
+    defer alloc.free(result);
+    try std.testing.expect(std.mem.indexOf(u8, result, "<time>2026-06-25 14:03:09</time>") != null);
 }

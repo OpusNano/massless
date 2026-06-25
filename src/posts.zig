@@ -2,10 +2,21 @@ const std = @import("std");
 const Io = std.Io;
 const markdown = @import("markdown.zig");
 
+pub const PostTimestamp = struct {
+    year: u16,
+    month: u8,
+    day: u8,
+    hour: u8,
+    min: u8,
+    sec: u8,
+    has_time: bool,
+};
+
 pub const Post = struct {
     slug: []const u8,
     title: []const u8,
     date: []const u8,
+    timestamp: PostTimestamp,
     body_md: []const u8,
     body_html: []const u8,
 };
@@ -115,10 +126,28 @@ pub const PostsSnapshot = struct {
     }
 };
 
-fn parseFilename(name: []const u8) struct { date: []const u8, slug: []const u8 } {
+fn parseTimestampedFilename(name: []const u8) ?struct { timestamp: PostTimestamp, slug: []const u8 } {
+    if (!std.mem.endsWith(u8, name, ".md")) return null;
     const no_ext = name[0 .. name.len - 3];
+    if (no_ext.len < 12) return null;
+    if (no_ext[4] != '-' or no_ext[7] != '-' or no_ext[10] != '-') return null;
+    const year = std.fmt.parseInt(u16, no_ext[0..4], 10) catch return null;
+    const month = std.fmt.parseInt(u8, no_ext[5..7], 10) catch return null;
+    const day = std.fmt.parseInt(u8, no_ext[8..10], 10) catch return null;
+    if (month < 1 or month > 12) return null;
+    if (day < 1 or day > 31) return null;
+    if (no_ext.len >= 20 and no_ext[13] == '-' and no_ext[16] == '-' and no_ext[19] == '-') {
+        const hour = std.fmt.parseInt(u8, no_ext[11..13], 10) catch return null;
+        const min = std.fmt.parseInt(u8, no_ext[14..16], 10) catch return null;
+        const sec = std.fmt.parseInt(u8, no_ext[17..19], 10) catch return null;
+        if (hour > 23 or min > 59 or sec > 59) return null;
+        return .{
+            .timestamp = .{ .year = year, .month = month, .day = day, .hour = hour, .min = min, .sec = sec, .has_time = true },
+            .slug = no_ext[20..],
+        };
+    }
     return .{
-        .date = no_ext[0..10],
+        .timestamp = .{ .year = year, .month = month, .day = day, .hour = 0, .min = 0, .sec = 0, .has_time = false },
         .slug = no_ext[11..],
     };
 }
@@ -145,14 +174,10 @@ fn parseFrontmatter(content: []const u8, allocator: std.mem.Allocator) !struct {
 
 fn isValidFilename(name: []const u8) bool {
     if (name.len < 15) return false;
-    if (!std.mem.eql(u8, name[name.len - 3 ..], ".md")) return false;
-    for (0..4) |i| if (!std.ascii.isDigit(name[i])) return false;
-    if (name[4] != '-') return false;
-    for (5..7) |i| if (!std.ascii.isDigit(name[i])) return false;
-    if (name[7] != '-') return false;
-    for (8..10) |i| if (!std.ascii.isDigit(name[i])) return false;
-    if (name[10] != '-') return false;
-    for (name[11 .. name.len - 3]) |ch| {
+    if (!std.mem.endsWith(u8, name, ".md")) return false;
+    const parsed = parseTimestampedFilename(name) orelse return false;
+    if (parsed.slug.len == 0) return false;
+    for (parsed.slug) |ch| {
         if (!std.ascii.isLower(ch) and !std.ascii.isDigit(ch) and ch != '-') return false;
     }
     return true;
@@ -180,9 +205,13 @@ pub fn scanAndRender(allocator: std.mem.Allocator, io: std.Io) !Index {
             continue;
         }
 
-        const parsed = parseFilename(entry.name);
-        const date = try aa.dupe(u8, parsed.date);
+        const parsed = parseTimestampedFilename(entry.name).?;
         const slug = try aa.dupe(u8, parsed.slug);
+        const ts = parsed.timestamp;
+        const display_date = if (ts.has_time)
+            try std.fmt.allocPrint(aa, "{d:0>4}-{d:0>2}-{d:0>2} {d:0>2}:{d:0>2}:{d:0>2}", .{ ts.year, ts.month, ts.day, ts.hour, ts.min, ts.sec })
+        else
+            try std.fmt.allocPrint(aa, "{d:0>4}-{d:0>2}-{d:0>2}", .{ ts.year, ts.month, ts.day });
 
         const content = dir.readFileAlloc(io, entry.name, aa, .unlimited) catch |err| {
             std.log.err("failed to read {s}: {s}", .{ entry.name, @errorName(err) });
@@ -197,7 +226,8 @@ pub fn scanAndRender(allocator: std.mem.Allocator, io: std.Io) !Index {
         try posts.append(aa, Post{
             .slug = slug,
             .title = title,
-            .date = date,
+            .date = display_date,
+            .timestamp = ts,
             .body_md = body_md,
             .body_html = body_html,
         });
@@ -205,15 +235,37 @@ pub fn scanAndRender(allocator: std.mem.Allocator, io: std.Io) !Index {
 
     std.sort.pdq(Post, posts.items, {}, struct {
         fn lessThan(_: void, a: Post, b: Post) bool {
-            const date_order = std.mem.order(u8, a.date, b.date);
-            if (date_order == .eq) {
-                return std.mem.order(u8, a.slug, b.slug) == .lt;
-            }
-            return date_order == .gt;
+            const ta = a.timestamp;
+            const tb = b.timestamp;
+            if (ta.year != tb.year) return ta.year > tb.year;
+            if (ta.month != tb.month) return ta.month > tb.month;
+            if (ta.day != tb.day) return ta.day > tb.day;
+            if (ta.hour != tb.hour) return ta.hour > tb.hour;
+            if (ta.min != tb.min) return ta.min > tb.min;
+            if (ta.sec != tb.sec) return ta.sec > tb.sec;
+            return std.mem.order(u8, a.slug, b.slug) == .lt;
         }
     }.lessThan);
 
-    return Index{ .posts = try posts.toOwnedSlice(aa), .arena = arena };
+    // ponytail: O(n²) dedup, fine for blog-scale post counts
+    var deduped = std.ArrayListAligned(Post, null){ .items = &.{}, .capacity = 0 };
+    defer deduped.deinit(aa);
+    for (posts.items) |post| {
+        var dup = false;
+        for (deduped.items) |existing| {
+            if (std.mem.eql(u8, existing.slug, post.slug)) {
+                dup = true;
+                break;
+            }
+        }
+        if (dup) {
+            std.log.warn("duplicate slug '{s}', skipping older post", .{post.slug});
+        } else {
+            try deduped.append(aa, post);
+        }
+    }
+
+    return Index{ .posts = try deduped.toOwnedSlice(aa), .arena = arena };
 }
 
 test "isValidFilename: valid names" {
@@ -364,23 +416,31 @@ test "posts sorted newest first" {
     var posts = std.ArrayListAligned(Post, null){ .items = &.{}, .capacity = 0 };
     defer posts.deinit(aa);
 
-    try posts.append(aa, Post{ .slug = "a", .title = "", .date = "2024-01-01", .body_md = "", .body_html = "" });
-    try posts.append(aa, Post{ .slug = "b", .title = "", .date = "2025-06-15", .body_md = "", .body_html = "" });
-    try posts.append(aa, Post{ .slug = "c", .title = "", .date = "2026-12-31", .body_md = "", .body_html = "" });
+    const ts_2024 = PostTimestamp{ .year = 2024, .month = 1, .day = 1, .hour = 0, .min = 0, .sec = 0, .has_time = false };
+    const ts_2025 = PostTimestamp{ .year = 2025, .month = 6, .day = 15, .hour = 0, .min = 0, .sec = 0, .has_time = false };
+    const ts_2026 = PostTimestamp{ .year = 2026, .month = 12, .day = 31, .hour = 0, .min = 0, .sec = 0, .has_time = false };
+
+    try posts.append(aa, Post{ .slug = "a", .title = "", .date = "2024-01-01", .timestamp = ts_2024, .body_md = "", .body_html = "" });
+    try posts.append(aa, Post{ .slug = "b", .title = "", .date = "2025-06-15", .timestamp = ts_2025, .body_md = "", .body_html = "" });
+    try posts.append(aa, Post{ .slug = "c", .title = "", .date = "2026-12-31", .timestamp = ts_2026, .body_md = "", .body_html = "" });
 
     std.sort.pdq(Post, posts.items, {}, struct {
         fn lessThan(_: void, a: Post, b: Post) bool {
-            const date_order = std.mem.order(u8, a.date, b.date);
-            if (date_order == .eq) {
-                return std.mem.order(u8, a.slug, b.slug) == .lt;
-            }
-            return date_order == .gt;
+            const ta = a.timestamp;
+            const tb = b.timestamp;
+            if (ta.year != tb.year) return ta.year > tb.year;
+            if (ta.month != tb.month) return ta.month > tb.month;
+            if (ta.day != tb.day) return ta.day > tb.day;
+            if (ta.hour != tb.hour) return ta.hour > tb.hour;
+            if (ta.min != tb.min) return ta.min > tb.min;
+            if (ta.sec != tb.sec) return ta.sec > tb.sec;
+            return std.mem.order(u8, a.slug, b.slug) == .lt;
         }
     }.lessThan);
 
-    try std.testing.expectEqualStrings("2026-12-31", posts.items[0].date);
-    try std.testing.expectEqualStrings("2025-06-15", posts.items[1].date);
-    try std.testing.expectEqualStrings("2024-01-01", posts.items[2].date);
+    try std.testing.expectEqualStrings("c", posts.items[0].slug);
+    try std.testing.expectEqualStrings("b", posts.items[1].slug);
+    try std.testing.expectEqualStrings("a", posts.items[2].slug);
 }
 
 test "same-date posts sorted by slug" {
@@ -391,23 +451,290 @@ test "same-date posts sorted by slug" {
     var posts = std.ArrayListAligned(Post, null){ .items = &.{}, .capacity = 0 };
     defer posts.deinit(aa);
 
-    try posts.append(aa, Post{ .slug = "zebra", .title = "", .date = "2026-06-25", .body_md = "", .body_html = "" });
-    try posts.append(aa, Post{ .slug = "alpha", .title = "", .date = "2026-06-25", .body_md = "", .body_html = "" });
-    try posts.append(aa, Post{ .slug = "moon", .title = "", .date = "2026-06-25", .body_md = "", .body_html = "" });
+    const ts = PostTimestamp{ .year = 2026, .month = 6, .day = 25, .hour = 0, .min = 0, .sec = 0, .has_time = false };
+
+    try posts.append(aa, Post{ .slug = "zebra", .title = "", .date = "2026-06-25", .timestamp = ts, .body_md = "", .body_html = "" });
+    try posts.append(aa, Post{ .slug = "alpha", .title = "", .date = "2026-06-25", .timestamp = ts, .body_md = "", .body_html = "" });
+    try posts.append(aa, Post{ .slug = "moon", .title = "", .date = "2026-06-25", .timestamp = ts, .body_md = "", .body_html = "" });
 
     std.sort.pdq(Post, posts.items, {}, struct {
         fn lessThan(_: void, a: Post, b: Post) bool {
-            const date_order = std.mem.order(u8, a.date, b.date);
-            if (date_order == .eq) {
-                return std.mem.order(u8, a.slug, b.slug) == .lt;
-            }
-            return date_order == .gt;
+            const ta = a.timestamp;
+            const tb = b.timestamp;
+            if (ta.year != tb.year) return ta.year > tb.year;
+            if (ta.month != tb.month) return ta.month > tb.month;
+            if (ta.day != tb.day) return ta.day > tb.day;
+            if (ta.hour != tb.hour) return ta.hour > tb.hour;
+            if (ta.min != tb.min) return ta.min > tb.min;
+            if (ta.sec != tb.sec) return ta.sec > tb.sec;
+            return std.mem.order(u8, a.slug, b.slug) == .lt;
         }
     }.lessThan);
 
     try std.testing.expectEqualStrings("alpha", posts.items[0].slug);
     try std.testing.expectEqualStrings("moon", posts.items[1].slug);
     try std.testing.expectEqualStrings("zebra", posts.items[2].slug);
+}
+
+test "isValidFilename: valid timestamped name" {
+    try std.testing.expect(isValidFilename("2026-06-25-14-03-09-hello-world.md"));
+}
+
+test "isValidFilename: rejects 24h" {
+    try std.testing.expect(!isValidFilename("2026-06-25-24-00-00-bad.md"));
+}
+
+test "isValidFilename: rejects 60m" {
+    try std.testing.expect(!isValidFilename("2026-06-25-12-60-00-bad.md"));
+}
+
+test "isValidFilename: rejects 60s" {
+    try std.testing.expect(!isValidFilename("2026-06-25-12-00-60-bad.md"));
+}
+
+test "isValidFilename: rejects invalid month" {
+    try std.testing.expect(!isValidFilename("2026-13-01-hello.md"));
+}
+
+test "isValidFilename: rejects invalid day" {
+    try std.testing.expect(!isValidFilename("2026-06-32-hello.md"));
+}
+
+test "isValidFilename: rejects non-digit in timestamp hour" {
+    try std.testing.expect(!isValidFilename("2026-06-25-ab-00-00-bad.md"));
+}
+
+test "timestamped posts sort newest first by time" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    var posts = std.ArrayListAligned(Post, null){ .items = &.{}, .capacity = 0 };
+    defer posts.deinit(aa);
+
+    try posts.append(aa, Post{ .slug = "early", .title = "", .date = "2026-06-25 09:00:00", .timestamp = .{ .year = 2026, .month = 6, .day = 25, .hour = 9, .min = 0, .sec = 0, .has_time = true }, .body_md = "", .body_html = "" });
+    try posts.append(aa, Post{ .slug = "late", .title = "", .date = "2026-06-25 14:30:00", .timestamp = .{ .year = 2026, .month = 6, .day = 25, .hour = 14, .min = 30, .sec = 0, .has_time = true }, .body_md = "", .body_html = "" });
+    try posts.append(aa, Post{ .slug = "mid", .title = "", .date = "2026-06-25 12:00:00", .timestamp = .{ .year = 2026, .month = 6, .day = 25, .hour = 12, .min = 0, .sec = 0, .has_time = true }, .body_md = "", .body_html = "" });
+
+    std.sort.pdq(Post, posts.items, {}, struct {
+        fn lessThan(_: void, a: Post, b: Post) bool {
+            const ta = a.timestamp;
+            const tb = b.timestamp;
+            if (ta.year != tb.year) return ta.year > tb.year;
+            if (ta.month != tb.month) return ta.month > tb.month;
+            if (ta.day != tb.day) return ta.day > tb.day;
+            if (ta.hour != tb.hour) return ta.hour > tb.hour;
+            if (ta.min != tb.min) return ta.min > tb.min;
+            if (ta.sec != tb.sec) return ta.sec > tb.sec;
+            return std.mem.order(u8, a.slug, b.slug) == .lt;
+        }
+    }.lessThan);
+
+    try std.testing.expectEqualStrings("late", posts.items[0].slug);
+    try std.testing.expectEqualStrings("mid", posts.items[1].slug);
+    try std.testing.expectEqualStrings("early", posts.items[2].slug);
+}
+
+test "date-only posts sort as midnight before timestamped" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    var posts = std.ArrayListAligned(Post, null){ .items = &.{}, .capacity = 0 };
+    defer posts.deinit(aa);
+
+    // Same day: date-only (midnight) and timestamped at 08:00
+    const ts_midnight = PostTimestamp{ .year = 2026, .month = 6, .day = 25, .hour = 0, .min = 0, .sec = 0, .has_time = false };
+    const ts_morning = PostTimestamp{ .year = 2026, .month = 6, .day = 25, .hour = 8, .min = 0, .sec = 0, .has_time = true };
+
+    try posts.append(aa, Post{ .slug = "midnight-post", .title = "", .date = "2026-06-25", .timestamp = ts_midnight, .body_md = "", .body_html = "" });
+    try posts.append(aa, Post{ .slug = "morning-post", .title = "", .date = "2026-06-25 08:00:00", .timestamp = ts_morning, .body_md = "", .body_html = "" });
+
+    std.sort.pdq(Post, posts.items, {}, struct {
+        fn lessThan(_: void, a: Post, b: Post) bool {
+            const ta = a.timestamp;
+            const tb = b.timestamp;
+            if (ta.year != tb.year) return ta.year > tb.year;
+            if (ta.month != tb.month) return ta.month > tb.month;
+            if (ta.day != tb.day) return ta.day > tb.day;
+            if (ta.hour != tb.hour) return ta.hour > tb.hour;
+            if (ta.min != tb.min) return ta.min > tb.min;
+            if (ta.sec != tb.sec) return ta.sec > tb.sec;
+            return std.mem.order(u8, a.slug, b.slug) == .lt;
+        }
+    }.lessThan);
+
+    try std.testing.expectEqualStrings("morning-post", posts.items[0].slug);
+    try std.testing.expectEqualStrings("midnight-post", posts.items[1].slug);
+}
+
+test "same timestamp sorts by slug ascending" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    var posts = std.ArrayListAligned(Post, null){ .items = &.{}, .capacity = 0 };
+    defer posts.deinit(aa);
+
+    const ts = PostTimestamp{ .year = 2026, .month = 6, .day = 25, .hour = 12, .min = 0, .sec = 0, .has_time = true };
+
+    try posts.append(aa, Post{ .slug = "zulu", .title = "", .date = "2026-06-25 12:00:00", .timestamp = ts, .body_md = "", .body_html = "" });
+    try posts.append(aa, Post{ .slug = "alpha", .title = "", .date = "2026-06-25 12:00:00", .timestamp = ts, .body_md = "", .body_html = "" });
+    try posts.append(aa, Post{ .slug = "mike", .title = "", .date = "2026-06-25 12:00:00", .timestamp = ts, .body_md = "", .body_html = "" });
+
+    std.sort.pdq(Post, posts.items, {}, struct {
+        fn lessThan(_: void, a: Post, b: Post) bool {
+            const ta = a.timestamp;
+            const tb = b.timestamp;
+            if (ta.year != tb.year) return ta.year > tb.year;
+            if (ta.month != tb.month) return ta.month > tb.month;
+            if (ta.day != tb.day) return ta.day > tb.day;
+            if (ta.hour != tb.hour) return ta.hour > tb.hour;
+            if (ta.min != tb.min) return ta.min > tb.min;
+            if (ta.sec != tb.sec) return ta.sec > tb.sec;
+            return std.mem.order(u8, a.slug, b.slug) == .lt;
+        }
+    }.lessThan);
+
+    try std.testing.expectEqualStrings("alpha", posts.items[0].slug);
+    try std.testing.expectEqualStrings("mike", posts.items[1].slug);
+    try std.testing.expectEqualStrings("zulu", posts.items[2].slug);
+}
+
+test "cross-day mixed date-only and timestamped sort" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    var posts = std.ArrayListAligned(Post, null){ .items = &.{}, .capacity = 0 };
+    defer posts.deinit(aa);
+
+    const ts_yesterday = PostTimestamp{ .year = 2026, .month = 6, .day = 24, .hour = 23, .min = 59, .sec = 59, .has_time = true };
+    const ts_today_mid = PostTimestamp{ .year = 2026, .month = 6, .day = 25, .hour = 0, .min = 0, .sec = 0, .has_time = false };
+    const ts_today_noon = PostTimestamp{ .year = 2026, .month = 6, .day = 25, .hour = 12, .min = 30, .sec = 15, .has_time = true };
+    const ts_tomorrow = PostTimestamp{ .year = 2026, .month = 6, .day = 28, .hour = 0, .min = 0, .sec = 0, .has_time = false };
+
+    try posts.append(aa, Post{ .slug = "yesterday", .title = "", .date = "2026-06-24 23:59:59", .timestamp = ts_yesterday, .body_md = "", .body_html = "" });
+    try posts.append(aa, Post{ .slug = "today-dateonly", .title = "", .date = "2026-06-25", .timestamp = ts_today_mid, .body_md = "", .body_html = "" });
+    try posts.append(aa, Post{ .slug = "today-noon", .title = "", .date = "2026-06-25 12:30:15", .timestamp = ts_today_noon, .body_md = "", .body_html = "" });
+    try posts.append(aa, Post{ .slug = "tomorrow", .title = "", .date = "2026-06-28", .timestamp = ts_tomorrow, .body_md = "", .body_html = "" });
+
+    std.sort.pdq(Post, posts.items, {}, struct {
+        fn lessThan(_: void, a: Post, b: Post) bool {
+            const ta = a.timestamp;
+            const tb = b.timestamp;
+            if (ta.year != tb.year) return ta.year > tb.year;
+            if (ta.month != tb.month) return ta.month > tb.month;
+            if (ta.day != tb.day) return ta.day > tb.day;
+            if (ta.hour != tb.hour) return ta.hour > tb.hour;
+            if (ta.min != tb.min) return ta.min > tb.min;
+            if (ta.sec != tb.sec) return ta.sec > tb.sec;
+            return std.mem.order(u8, a.slug, b.slug) == .lt;
+        }
+    }.lessThan);
+
+    try std.testing.expectEqualStrings("tomorrow", posts.items[0].slug);
+    try std.testing.expectEqualStrings("today-noon", posts.items[1].slug);
+    try std.testing.expectEqualStrings("today-dateonly", posts.items[2].slug);
+    try std.testing.expectEqualStrings("yesterday", posts.items[3].slug);
+}
+
+test "dedup keeps first (newest) post per slug" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    var posts = std.ArrayListAligned(Post, null){ .items = &.{}, .capacity = 0 };
+    defer posts.deinit(aa);
+
+    const ts_newer = PostTimestamp{ .year = 2026, .month = 6, .day = 25, .hour = 12, .min = 0, .sec = 0, .has_time = true };
+    const ts_older = PostTimestamp{ .year = 2026, .month = 6, .day = 25, .hour = 0, .min = 0, .sec = 0, .has_time = false };
+
+    // Append older first, newer second — after sort, newer is first
+    try posts.append(aa, Post{ .slug = "dup", .title = "", .date = "2026-06-25", .timestamp = ts_older, .body_md = "", .body_html = "" });
+    try posts.append(aa, Post{ .slug = "dup", .title = "", .date = "2026-06-25 12:00:00", .timestamp = ts_newer, .body_md = "", .body_html = "" });
+
+    std.sort.pdq(Post, posts.items, {}, struct {
+        fn lessThan(_: void, a: Post, b: Post) bool {
+            const ta = a.timestamp;
+            const tb = b.timestamp;
+            if (ta.year != tb.year) return ta.year > tb.year;
+            if (ta.month != tb.month) return ta.month > tb.month;
+            if (ta.day != tb.day) return ta.day > tb.day;
+            if (ta.hour != tb.hour) return ta.hour > tb.hour;
+            if (ta.min != tb.min) return ta.min > tb.min;
+            if (ta.sec != tb.sec) return ta.sec > tb.sec;
+            return std.mem.order(u8, a.slug, b.slug) == .lt;
+        }
+    }.lessThan);
+
+    // Sorted: newer first
+    try std.testing.expectEqualStrings("2026-06-25 12:00:00", posts.items[0].date);
+    try std.testing.expectEqualStrings("2026-06-25", posts.items[1].date);
+
+    // Dedup: keep first (newest)
+    var deduped = std.ArrayListAligned(Post, null){ .items = &.{}, .capacity = 0 };
+    defer deduped.deinit(aa);
+
+    for (posts.items) |post| {
+        var dup = false;
+        for (deduped.items) |existing| {
+            if (std.mem.eql(u8, existing.slug, post.slug)) {
+                dup = true;
+                break;
+            }
+        }
+        if (dup) {
+            // skip older
+        } else {
+            try deduped.append(aa, post);
+        }
+    }
+
+    try std.testing.expectEqual(@as(usize, 1), deduped.items.len);
+    try std.testing.expectEqualStrings("2026-06-25 12:00:00", deduped.items[0].date);
+}
+
+test "parseTimestampedFilename: date-only format" {
+    const result = parseTimestampedFilename("2026-06-25-hello-world.md").?;
+    try std.testing.expectEqual(@as(u16, 2026), result.timestamp.year);
+    try std.testing.expectEqual(@as(u8, 6), result.timestamp.month);
+    try std.testing.expectEqual(@as(u8, 25), result.timestamp.day);
+    try std.testing.expectEqual(@as(u8, 0), result.timestamp.hour);
+    try std.testing.expectEqual(@as(u8, 0), result.timestamp.min);
+    try std.testing.expectEqual(@as(u8, 0), result.timestamp.sec);
+    try std.testing.expect(!result.timestamp.has_time);
+    try std.testing.expectEqualStrings("hello-world", result.slug);
+}
+
+test "parseTimestampedFilename: timestamped format" {
+    const result = parseTimestampedFilename("2026-06-25-14-03-09-hello.md").?;
+    try std.testing.expectEqual(@as(u16, 2026), result.timestamp.year);
+    try std.testing.expectEqual(@as(u8, 6), result.timestamp.month);
+    try std.testing.expectEqual(@as(u8, 25), result.timestamp.day);
+    try std.testing.expectEqual(@as(u8, 14), result.timestamp.hour);
+    try std.testing.expectEqual(@as(u8, 3), result.timestamp.min);
+    try std.testing.expectEqual(@as(u8, 9), result.timestamp.sec);
+    try std.testing.expect(result.timestamp.has_time);
+    try std.testing.expectEqualStrings("hello", result.slug);
+}
+
+test "parseTimestampedFilename: rejects 24h" {
+    try std.testing.expect(parseTimestampedFilename("2026-06-25-24-00-00-bad.md") == null);
+}
+
+test "parseTimestampedFilename: rejects 60m" {
+    try std.testing.expect(parseTimestampedFilename("2026-06-25-12-60-00-bad.md") == null);
+}
+
+test "parseTimestampedFilename: rejects 60s" {
+    try std.testing.expect(parseTimestampedFilename("2026-06-25-12-00-60-bad.md") == null);
+}
+
+test "parseTimestampedFilename: slug with hyphens in date-only" {
+    const result = parseTimestampedFilename("2026-06-25-a-b-c.md").?;
+    try std.testing.expect(!result.timestamp.has_time);
+    try std.testing.expectEqualStrings("a-b-c", result.slug);
 }
 
 test "snapshot comparison order-independent for same files" {
