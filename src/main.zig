@@ -43,6 +43,22 @@ fn mimeType(path: []const u8) []const u8 {
     return "application/octet-stream";
 }
 
+fn isSafeRelPath(path: []const u8) bool {
+    if (path.len == 0) return false;
+    if (path[0] == '/') return false;
+    for (path) |ch| {
+        if (ch == '\\') return false;
+        if (ch < 0x20 or ch == 0x7f) return false;
+    }
+    var it = std.mem.splitScalar(u8, path, '/');
+    while (it.next()) |segment| {
+        if (segment.len == 0) return false;
+        if (std.mem.eql(u8, segment, ".")) return false;
+        if (std.mem.eql(u8, segment, "..")) return false;
+    }
+    return true;
+}
+
 fn handleRoute(route: Route, index: *const posts_mod.Index, hot_reload: bool, io: Io, aa: std.mem.Allocator) !Response {
     switch (route) {
         .home, .posts_list => {
@@ -81,7 +97,7 @@ fn handleRoute(route: Route, index: *const posts_mod.Index, hot_reload: bool, io
             };
         },
         .public => |rel| {
-            if (std.mem.indexOf(u8, rel, "..") != null) {
+            if (!isSafeRelPath(rel)) {
                 return Response{
                     .body = try template.notFound(aa),
                     .status = .not_found,
@@ -89,7 +105,7 @@ fn handleRoute(route: Route, index: *const posts_mod.Index, hot_reload: bool, io
                 };
             }
             const prefixed = try std.fmt.allocPrint(aa, "public/{s}", .{rel});
-            const file_content = Io.Dir.cwd().readFileAlloc(io, prefixed, aa, .unlimited) catch {
+            const file_content = Io.Dir.cwd().readFileAlloc(io, prefixed, aa, Io.Limit.limited(config.max_public_file_bytes)) catch {
                 return Response{
                     .body = try template.notFound(aa),
                     .status = .not_found,
@@ -102,11 +118,18 @@ fn handleRoute(route: Route, index: *const posts_mod.Index, hot_reload: bool, io
                 .content_type = mimeType(rel),
             };
         },
-        .events => return Response{
-            .body = "",
-            .status = .ok,
-            .content_type = "text/event-stream",
-        },
+        .events => return if (hot_reload)
+            Response{
+                .body = "",
+                .status = .ok,
+                .content_type = "text/event-stream",
+            }
+        else
+            Response{
+                .body = try template.notFound(aa),
+                .status = .not_found,
+                .content_type = "text/html",
+            },
         .not_found => return Response{
             .body = try template.notFound(aa),
             .status = .not_found,
@@ -218,7 +241,19 @@ pub fn main() !void {
 
             const route = match(request.head.target);
 
-            if (route == .events) {
+            if (request.head.method != .GET and request.head.method != .HEAD) {
+                request.respond("", .{
+                    .status = .method_not_allowed,
+                    .extra_headers = &.{
+                        .{ .name = "content-type", .value = "text/html" },
+                    },
+                }) catch |err| {
+                    std.log.err("405 respond failed: {s}", .{@errorName(err)});
+                };
+                continue;
+            }
+
+            if (config.hot_reload and route == .events) {
                 const sse_thread = std.Thread.spawn(.{}, handleSSE, .{ stream, io }) catch |err| {
                     std.log.err("failed to spawn SSE thread: {s}", .{@errorName(err)});
                     break;
@@ -243,13 +278,15 @@ pub fn main() !void {
             _ = arena.reset(.retain_capacity);
             const aa = arena.allocator();
 
-            if (snapshot.refresh(io) catch |err| blk: {
-                std.log.err("snapshot refresh error: {s}", .{@errorName(err)});
-                break :blk false;
-            }) {
-                const new_index = try posts_mod.scanAndRender(std.heap.smp_allocator, io);
-                index.deinit();
-                index = new_index;
+            if (config.hot_reload) {
+                if (snapshot.refresh(io) catch |err| blk: {
+                    std.log.err("snapshot refresh error: {s}", .{@errorName(err)});
+                    break :blk false;
+                }) {
+                    const new_index = try posts_mod.scanAndRender(std.heap.smp_allocator, io);
+                    index.deinit();
+                    index = new_index;
+                }
             }
 
             const result = try handleRoute(route, &index, config.hot_reload, io, aa);
@@ -289,23 +326,51 @@ test "match: public path extraction" {
     try std.testing.expectEqualStrings("style.css", @as(@TypeOf(r.public), r.public));
 }
 
-test "match: path traversal treated as not-found" {
+test "match: path traversal treated as post route" {
     const r = match("/posts/../build.zig");
     try std.testing.expect(r == .post);
     try std.testing.expectEqualStrings("../build.zig", @as(@TypeOf(r.post), r.post));
 }
 
-test "path traversal check: blocks .. in public path" {
-    const rel = "../build.zig";
-    try std.testing.expect(std.mem.indexOf(u8, rel, "..") != null);
+test "isSafeRelPath: blocks empty" {
+    try std.testing.expect(!isSafeRelPath(""));
 }
 
-test "path traversal check: allows safe paths" {
-    const rel = "style.css";
-    try std.testing.expect(std.mem.indexOf(u8, rel, "..") == null);
+test "isSafeRelPath: blocks absolute" {
+    try std.testing.expect(!isSafeRelPath("/etc/passwd"));
 }
 
-test "path traversal check: blocks nested .." {
-    const rel = "foo/../../etc/passwd";
-    try std.testing.expect(std.mem.indexOf(u8, rel, "..") != null);
+test "isSafeRelPath: blocks backslash" {
+    try std.testing.expect(!isSafeRelPath("a\\b"));
+}
+
+test "isSafeRelPath: blocks dot segment" {
+    try std.testing.expect(!isSafeRelPath("./foo"));
+    try std.testing.expect(!isSafeRelPath("foo/./bar"));
+}
+
+test "isSafeRelPath: blocks dot-dot segment" {
+    try std.testing.expect(!isSafeRelPath("../build.zig"));
+    try std.testing.expect(!isSafeRelPath("foo/../../etc/passwd"));
+    try std.testing.expect(!isSafeRelPath("foo/bar/.."));
+}
+
+test "isSafeRelPath: allows simple name" {
+    try std.testing.expect(isSafeRelPath("style.css"));
+}
+
+test "isSafeRelPath: allows nested path" {
+    try std.testing.expect(isSafeRelPath("css/site.css"));
+}
+
+test "isSafeRelPath: blocks double slash" {
+    try std.testing.expect(!isSafeRelPath("a//b"));
+}
+
+test "isSafeRelPath: blocks trailing slash" {
+    try std.testing.expect(!isSafeRelPath("a/"));
+}
+
+test "isSafeRelPath: blocks NUL" {
+    try std.testing.expect(!isSafeRelPath("a\x00b"));
 }

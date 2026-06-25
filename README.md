@@ -1,7 +1,7 @@
 # massless
 
 Zero-dependency blog server — Zig stdlib only. Serves Markdown posts as HTML with
-hot-reload SSE. Single static binary, fits in a `FROM scratch` Docker image.
+optional hot-reload SSE. Single static binary, fits in a `FROM scratch` Docker image.
 
 ## Quick start
 
@@ -9,35 +9,39 @@ hot-reload SSE. Single static binary, fits in a `FROM scratch` Docker image.
 zig build run
 ```
 
-Open http://0.0.0.0:8080
+Open http://0.0.0.0:8420
 
 ## Build & test
 
 ```sh
-zig build test   # run 54 tests
-zig build        # binary in zig-out/bin/
+zig build test
+zig build          # binary in zig-out/bin/
 ```
 
 ## Docker
 
 ```sh
 docker build -t massless .
-docker run --rm -p 8080:8080 -v ./posts:/posts -v ./public:/public massless
+docker run --rm -p 8420:8420 -v ./posts:/posts -v ./public:/public massless
 ```
 
-Image size: ~330 kB (`FROM scratch`). Runtime memory: ~2 MiB.
+Image size: ~370 kB (`FROM scratch`).
 
 ## Posts
 
-Place Markdown files in `posts/` with the format:
+Place Markdown files in `posts/` with format:
 
 ```
 YYYY-MM-DD-slug.md
 ```
 
-Slug rules: lowercase letters, digits, hyphens only — no spaces or special chars.
+Or with a timestamp:
 
-Example: `2026-06-25-hello-world.md`
+```
+YYYY-MM-DD-HH-MM-SS-slug.md
+```
+
+Slug: lowercase letters, digits, hyphens only. Max post size: 1 MiB.
 
 Frontmatter (optional):
 
@@ -48,11 +52,13 @@ title: My Post
 Body text here.
 ```
 
-Posts are listed newest-first. Homepage shows the 5 latest; `/posts` shows all.
+Posts are listed newest-first on the homepage. All valid posts are shown.
+`/posts/<slug>` serves an individual post. `/posts` redirects to `/`.
 
 ## Static assets
 
-Place files in `public/` — served at `/public/<path>`. Path traversal is blocked.
+Place files in `public/` — served at `/public/<path>`. Path traversal is
+blocked. Max file size: 2 MiB. Oversized files return 413 Payload Too Large.
 
 ## Markdown support
 
@@ -73,9 +79,12 @@ Edit `src/config.zig`:
 ```zig
 pub const site_title = "massless";
 pub const bind_addr = "0.0.0.0";
-pub const port: u16 = 8080;
+pub const port: u16 = 8420;
 pub const hot_reload = true;
+pub const max_post_bytes: usize = 1024 * 1024;
+pub const max_public_file_bytes: usize = 2 * 1024 * 1024;
 ```
 
-Hot reload: the server polls `posts/` every 3s and pushes changes to browsers via
-SSE on `/events`. Set `hot_reload = false` to disable.
+**Hot reload**: when `hot_reload = true`, the server polls `posts/` every 3s
+and pushes changes to browsers via SSE on `/events`. Set `hot_reload = false`
+to disable — `/events` returns 404 and no SSE script is injected.
