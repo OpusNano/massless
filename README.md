@@ -11,7 +11,8 @@ optional hot-reload SSE. Single static binary, fits in a `FROM scratch` Docker i
 zig build run
 ```
 
-Open http://0.0.0.0:8420
+Server listens on 0.0.0.0:8420 by default.
+Open http://127.0.0.1:8420 locally.
 
 ## Build & test
 
@@ -24,7 +25,7 @@ zig build          # binary in zig-out/bin/
 
 ```sh
 docker build -t massless .
-docker run --rm -p 8420:8420 -v ./posts:/posts -v ./public:/public massless
+docker run --rm -p 8420:8420 -v ./posts:/posts:ro -v ./public:/public:ro massless
 ```
 
 Image size: ~320 kB (`FROM scratch`).
