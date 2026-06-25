@@ -484,3 +484,87 @@ test "link with leading space is rejected" {
     defer alloc.free(result);
     try std.testing.expect(std.mem.indexOf(u8, result, "href=\"#\"") != null);
 }
+
+test "link blocks data protocol" {
+    const alloc = std.testing.allocator;
+    const result = try toHtml("[x](data:text/html,<script>)", alloc);
+    defer alloc.free(result);
+    try std.testing.expect(std.mem.indexOf(u8, result, "data:") == null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "href=\"#\"") != null);
+}
+
+test "link blocks vbscript protocol" {
+    const alloc = std.testing.allocator;
+    const result = try toHtml("[x](vbscript:msgbox(1))", alloc);
+    defer alloc.free(result);
+    try std.testing.expect(std.mem.indexOf(u8, result, "vbscript:") == null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "href=\"#\"") != null);
+}
+
+test "link allows mailto" {
+    const alloc = std.testing.allocator;
+    const result = try toHtml("[x](mailto:a@b.com)", alloc);
+    defer alloc.free(result);
+    try std.testing.expect(std.mem.indexOf(u8, result, "href=\"mailto:a@b.com\"") != null);
+}
+
+test "link blocks scheme-only url" {
+    const alloc = std.testing.allocator;
+    const result = try toHtml("[x](:bad)", alloc);
+    defer alloc.free(result);
+    try std.testing.expect(std.mem.indexOf(u8, result, "href=\"#\"") != null);
+}
+
+test "code span preserves literal angle brackets" {
+    const alloc = std.testing.allocator;
+    try testHtmlEqual(
+        "<p><code>&lt;div&gt;</code></p>\n",
+        "`<div>`",
+        alloc,
+    );
+}
+
+test "ampersand in text is escaped" {
+    const alloc = std.testing.allocator;
+    try testHtmlEqual("<p>a &amp; b</p>\n", "a & b", alloc);
+}
+
+test "link text containing HTML is escaped" {
+    const alloc = std.testing.allocator;
+    const result = try toHtml("[<script>](http://x.com)", alloc);
+    defer alloc.free(result);
+    try std.testing.expect(std.mem.indexOf(u8, result, "&lt;script&gt;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "<script>") == null);
+}
+
+test "image alt containing HTML is escaped" {
+    const alloc = std.testing.allocator;
+    const result = try toHtml("![<x>](img.png)", alloc);
+    defer alloc.free(result);
+    try std.testing.expect(std.mem.indexOf(u8, result, "alt=\"&lt;x&gt;\"") != null);
+}
+
+test "single underscore emits literal" {
+    const alloc = std.testing.allocator;
+    try testHtmlEqual("<p>a_b</p>\n", "a_b", alloc);
+}
+
+test "double underscore for strong" {
+    const alloc = std.testing.allocator;
+    try testHtmlEqual("<p><strong>x</strong></p>\n", "__x__", alloc);
+}
+
+test "unordered list" {
+    const alloc = std.testing.allocator;
+    try testHtmlEqual("<ul>\n<li>a</li>\n</ul>\n", "- a", alloc);
+}
+
+test "ordered list" {
+    const alloc = std.testing.allocator;
+    try testHtmlEqual("<ol>\n<li>a</li>\n</ol>\n", "1. a", alloc);
+}
+
+test "toHtml OOM propagates" {
+    var alloc = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = 0 });
+    try std.testing.expectError(error.OutOfMemory, toHtml("Hello", alloc.allocator()));
+}

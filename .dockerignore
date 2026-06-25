@@ -1,0 +1,8 @@
+.zig-cache/
+zig-out/
+.git/
+.gitignore
+LICENSE
+Dockerfile
+.dockerignore
+*.md

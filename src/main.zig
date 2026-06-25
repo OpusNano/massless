@@ -37,7 +37,6 @@ fn mimeType(path: []const u8) []const u8 {
     if (std.mem.eql(u8, ext, ".js")) return "application/javascript";
     if (std.mem.eql(u8, ext, ".png")) return "image/png";
     if (std.mem.eql(u8, ext, ".jpg") or std.mem.eql(u8, ext, ".jpeg")) return "image/jpeg";
-    if (std.mem.eql(u8, ext, ".svg")) return "image/svg+xml";
     if (std.mem.eql(u8, ext, ".ico")) return "image/x-icon";
     if (std.mem.eql(u8, ext, ".woff2")) return "font/woff2";
     return "application/octet-stream";
@@ -139,29 +138,24 @@ fn handleRoute(route: Route, index: *const posts_mod.Index, hot_reload: bool, io
 }
 
 fn handleSSE(stream: net.Stream, io: Io) void {
-    var sse_recv: [256]u8 = undefined;
     var sse_send: [4096]u8 = undefined;
-    var conn_reader = stream.reader(io, &sse_recv);
-    var conn_writer = stream.writer(io, &sse_send);
-    var server = http.Server.init(&conn_reader.interface, &conn_writer.interface);
+    var cw = stream.writer(io, &sse_send);
+    var w: *Io.Writer = &cw.interface;
 
-    var request = server.receiveHead() catch return;
-
-    var sse_buf: [256]u8 = undefined;
-    var bw = request.respondStreaming(&sse_buf, .{
-        .respond_options = .{
-            .status = .ok,
-            .extra_headers = &.{
-                .{ .name = "content-type", .value = "text/event-stream" },
-                .{ .name = "cache-control", .value = "no-cache" },
-            },
-        },
-    }) catch {
+    w.writeAll("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n") catch {
+        stream.close(io);
+        return;
+    };
+    _ = w.flush() catch {
         stream.close(io);
         return;
     };
 
-    bw.writer.writeAll(": connected\n\n") catch {
+    w.writeAll(": connected\n\n") catch {
+        stream.close(io);
+        return;
+    };
+    _ = w.flush() catch {
         stream.close(io);
         return;
     };
@@ -174,9 +168,9 @@ fn handleSSE(stream: net.Stream, io: Io) void {
     };
 
     while (true) {
-        bw.writer.writeAll(": keepalive\n") catch break;
+        w.writeAll(": keepalive\n") catch break;
         if (hotreload.check()) {
-            bw.writer.writeAll("data: reload\n\n") catch break;
+            w.writeAll("data: reload\n\n") catch break;
             break;
         }
         if (sse_snapshot.refresh(io) catch false) {
@@ -185,7 +179,6 @@ fn handleSSE(stream: net.Stream, io: Io) void {
         Io.sleep(io, Io.Duration.fromMilliseconds(3000), .awake) catch break;
     }
 
-    bw.end() catch {};
     stream.close(io);
 }
 
@@ -239,17 +232,20 @@ pub fn main() !void {
                 },
             };
 
-            const route = match(request.head.target);
+            var target_path = request.head.target;
+            if (std.mem.indexOfScalar(u8, target_path, '?')) |pos| target_path = target_path[0..pos];
+            if (std.mem.indexOfScalar(u8, target_path, '#')) |pos| target_path = target_path[0..pos];
+            const route = match(target_path);
 
             if (request.head.method != .GET and request.head.method != .HEAD) {
-                request.respond("", .{
+                _ = request.respond("", .{
                     .status = .method_not_allowed,
                     .extra_headers = &.{
                         .{ .name = "content-type", .value = "text/html" },
+                        .{ .name = "x-content-type-options", .value = "nosniff" },
+                        .{ .name = "referrer-policy", .value = "no-referrer" },
                     },
-                }) catch |err| {
-                    std.log.err("405 respond failed: {s}", .{@errorName(err)});
-                };
+                }) catch {};
                 continue;
             }
 
@@ -264,14 +260,14 @@ pub fn main() !void {
             }
 
             if (route == .posts_list) {
-                request.respond("", .{
+                _ = request.respond("", .{
                     .status = .see_other,
                     .extra_headers = &.{
                         .{ .name = "location", .value = "/" },
+                        .{ .name = "x-content-type-options", .value = "nosniff" },
+                        .{ .name = "referrer-policy", .value = "no-referrer" },
                     },
-                }) catch |err| {
-                    std.log.err("redirect respond failed: {s}", .{@errorName(err)});
-                };
+                }) catch {};
                 continue;
             }
 
@@ -291,11 +287,26 @@ pub fn main() !void {
 
             const result = try handleRoute(route, &index, config.hot_reload, io, aa);
 
+            var hdr_buf: [4]http.Header = undefined;
+            var hdr_count: usize = 0;
+            hdr_buf[hdr_count] = .{ .name = "content-type", .value = result.content_type };
+            hdr_count += 1;
+            hdr_buf[hdr_count] = .{ .name = "x-content-type-options", .value = "nosniff" };
+            hdr_count += 1;
+            hdr_buf[hdr_count] = .{ .name = "referrer-policy", .value = "no-referrer" };
+            hdr_count += 1;
+            if (std.mem.eql(u8, result.content_type, "text/html")) {
+                const csp = if (config.hot_reload)
+                    "default-src 'self'; script-src 'unsafe-inline'; style-src 'self'; img-src 'self' http: https:; object-src 'none'; base-uri 'none'"
+                else
+                    "default-src 'self'; script-src 'none'; style-src 'self'; img-src 'self' http: https:; object-src 'none'; base-uri 'none'";
+                hdr_buf[hdr_count] = .{ .name = "content-security-policy", .value = csp };
+                hdr_count += 1;
+            }
+
             request.respond(result.body, .{
                 .status = result.status,
-                .extra_headers = &.{
-                    .{ .name = "content-type", .value = result.content_type },
-                },
+                .extra_headers = hdr_buf[0..hdr_count],
             }) catch |err| {
                 std.log.err("respond failed: {s}", .{@errorName(err)});
             };

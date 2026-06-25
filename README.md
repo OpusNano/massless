@@ -25,7 +25,10 @@ docker build -t massless .
 docker run --rm -p 8420:8420 -v ./posts:/posts -v ./public:/public massless
 ```
 
-Image size: ~370 kB (`FROM scratch`).
+Image size: ~320 kB (`FROM scratch`).
+
+Mounted `posts/` and `public/` directories must be readable by the container
+user (UID 65532). Use `chmod -R a+r posts public` if needed.
 
 ## Posts
 
@@ -42,6 +45,7 @@ YYYY-MM-DD-HH-MM-SS-slug.md
 ```
 
 Slug: lowercase letters, digits, hyphens only. Max post size: 1 MiB.
+Dates are validated (month lengths, leap years).
 
 Frontmatter (optional):
 
@@ -58,7 +62,7 @@ Posts are listed newest-first on the homepage. All valid posts are shown.
 ## Static assets
 
 Place files in `public/` — served at `/public/<path>`. Path traversal is
-blocked. Max file size: 2 MiB. Oversized files return 413 Payload Too Large.
+blocked. Max file size: 2 MiB. Oversized or unreadable files return 404.
 
 ## Markdown support
 

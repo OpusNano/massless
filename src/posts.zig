@@ -127,6 +127,15 @@ pub const PostsSnapshot = struct {
     }
 };
 
+fn daysInMonth(year: u16, month: u8) u8 {
+    return switch (month) {
+        1, 3, 5, 7, 8, 10, 12 => 31,
+        4, 6, 9, 11 => 30,
+        2 => if (year % 400 == 0 or (year % 4 == 0 and year % 100 != 0)) @as(u8, 29) else @as(u8, 28),
+        else => 0,
+    };
+}
+
 fn parseTimestampedFilename(name: []const u8) ?struct { timestamp: PostTimestamp, slug: []const u8 } {
     if (!std.mem.endsWith(u8, name, ".md")) return null;
     const no_ext = name[0 .. name.len - 3];
@@ -136,7 +145,8 @@ fn parseTimestampedFilename(name: []const u8) ?struct { timestamp: PostTimestamp
     const month = std.fmt.parseInt(u8, no_ext[5..7], 10) catch return null;
     const day = std.fmt.parseInt(u8, no_ext[8..10], 10) catch return null;
     if (month < 1 or month > 12) return null;
-    if (day < 1 or day > 31) return null;
+    if (day < 1) return null;
+    if (day > daysInMonth(year, month)) return null;
     if (no_ext.len >= 20 and no_ext[13] == '-' and no_ext[16] == '-' and no_ext[19] == '-') {
         const hour = std.fmt.parseInt(u8, no_ext[11..13], 10) catch return null;
         const min = std.fmt.parseInt(u8, no_ext[14..16], 10) catch return null;
@@ -758,4 +768,56 @@ test "snapshot comparison order-independent for same files" {
     try std.testing.expect(!snapshotsEqual(&files_a, &files_b));
     try std.testing.expect(snapshotsEqual(&files_a, &files_a));
     try std.testing.expect(snapshotsEqual(&files_b, &files_b));
+}
+
+test "parseTimestampedFilename: leap day 2024-02-29 valid" {
+    try std.testing.expect(parseTimestampedFilename("2024-02-29-leap.md") != null);
+}
+
+test "parseTimestampedFilename: leap day 2023-02-29 invalid" {
+    try std.testing.expect(parseTimestampedFilename("2023-02-29-nope.md") == null);
+}
+
+test "parseTimestampedFilename: feb 30 invalid" {
+    try std.testing.expect(parseTimestampedFilename("2026-02-30-bad.md") == null);
+}
+
+test "parseTimestampedFilename: apr 31 invalid" {
+    try std.testing.expect(parseTimestampedFilename("2026-04-31-bad.md") == null);
+}
+
+test "parseTimestampedFilename: jun 31 invalid" {
+    try std.testing.expect(parseTimestampedFilename("2026-06-31-bad.md") == null);
+}
+
+test "parseTimestampedFilename: nov 31 invalid" {
+    try std.testing.expect(parseTimestampedFilename("2026-11-31-bad.md") == null);
+}
+
+test "parseTimestampedFilename: century leap year 2000 valid" {
+    try std.testing.expect(parseTimestampedFilename("2000-02-29-leap.md") != null);
+}
+
+test "parseTimestampedFilename: century non-leap 2100 invalid" {
+    try std.testing.expect(parseTimestampedFilename("2100-02-29-nope.md") == null);
+}
+
+test "parseTimestampedFilename: dec 31 valid" {
+    const r = parseTimestampedFilename("2026-12-31-eoy.md").?;
+    try std.testing.expectEqual(@as(u8, 12), r.timestamp.month);
+    try std.testing.expectEqual(@as(u8, 31), r.timestamp.day);
+}
+
+test "parseTimestampedFilename: jan 1 valid" {
+    const r = parseTimestampedFilename("2026-01-01-new-year.md").?;
+    try std.testing.expectEqual(@as(u8, 1), r.timestamp.month);
+    try std.testing.expectEqual(@as(u8, 1), r.timestamp.day);
+}
+
+test "parseTimestampedFilename: rejects dots in slug" {
+    try std.testing.expect(!isValidFilename("2026-06-25-bad.slug.md"));
+}
+
+test "parseTimestampedFilename: rejects slashes in slug" {
+    try std.testing.expect(!isValidFilename("2026-06-25-bad/slug.md"));
 }
