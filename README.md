@@ -110,3 +110,12 @@ pub const max_public_file_bytes: usize = 2 * 1024 * 1024;
 **Hot reload**: when `hot_reload = true`, the server polls `posts/` every 3s
 and pushes changes to browsers via SSE on `/events`. Set `hot_reload = false`
 to disable — `/events` returns 404 and no SSE script is injected.
+
+## Performance
+
+| Metric | Native (ReleaseSmall) | Docker (`FROM scratch`) |
+|---|---|---|
+| Binary size | 193 KB | 205 KB (uncompressed layer) |
+| Image size | — | ~100 KB (compressed) |
+| RSS (idle) | ~890 KB | ~1.6 MiB |
+| RSS (after requests) | ~910 KB | ~1.8 MiB |
