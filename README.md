@@ -28,7 +28,7 @@ docker build -t massless .
 docker run --rm -p 8420:8420 -v ./posts:/posts:ro -v ./public:/public:ro massless
 ```
 
-Image size: ~320 kB (`FROM scratch`).
+Image size: ~100 kB (`FROM scratch`).
 
 Mounted `posts/` and `public/` directories must be readable by the container
 user (UID 65532). Use `chmod -R a+r posts public` if needed.
