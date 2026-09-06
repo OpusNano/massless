@@ -12,7 +12,7 @@ ENV PATH=/usr/local/zig-x86_64-linux-${ZIG_VERSION}:$PATH
 WORKDIR /app
 COPY build.zig build.zig
 COPY src/ src/
-RUN zig build -Doptimize=ReleaseSmall --prefix /out
+RUN zig build -Doptimize=ReleaseSmall -Dcpu=x86_64_v2 --prefix /out  # v2 baseline: EPYC-Rome/SIGILL-safe, see hetzner01
 
 # === Runtime stage ===
 FROM scratch
