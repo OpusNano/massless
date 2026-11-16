@@ -131,7 +131,7 @@ Do exactly one step per session, in order. Each step is about 15–30 minutes.
 - [x] **7. Dev mode.** `dev` feature: mtime polling of `posts/` + `templates/`,
   in-memory re-render, SSE `/events` reload. Confirm that the default build
   pulls in none of it (`cargo tree`, binary size unchanged).
-- [ ] **8. Ship.** Integration test (see Tests), multi-stage Dockerfile
+- [x] **8. Ship.** Integration test (see Tests), multi-stage Dockerfile
   (musl, scratch, UID 65532, x86-64-v2), README (usage, env, dev mode,
   Docker), local musl binary check. Write the **Report** below: binary size
   at opt-level 3 vs z (musl), wrk against `/` with keep-alive and with
@@ -174,6 +174,12 @@ Do exactly one step per session, in order. Each step is about 15–30 minutes.
 - Dev reload: each render gets a clock-based version embedded in its pages; `/events` sends the current version on connect and on change (`: ping` every 15 s), and the page reloads if it differs, so reconnects and server restarts reload only when needed.
 - SSE clients take the request via `Request::into_writer()` and run on their own thread; a render error is served as a 500 page (with the reload script) instead of exiting.
 - Dev responses: uncompressed, `Cache-Control: no-store`, a CSP that allows the inline script and `connect-src 'self'`.
+- Integration tests share a server helper in `tests/common/mod.rs`; `tests/site.rs` is `cfg(not(feature = "dev"))` (dev pages are uncompressed by design).
+- tiny_http patch: `TCP_NODELAY` on accepted sockets (Nagle + delayed ACK cost ~40 ms per keep-alive response) rather than a bigger write buffer (no extra per-connection memory).
+- Docker build stage `rust:1-alpine` with `--target x86_64-unknown-linux-musl` and `RUSTFLAGS=-C target-cpu=x86-64-v2` (applies to the binary only, not build.rs); `SITE_URL` is a build arg.
+- `.dockerignore` is an allowlist (only the files the build needs), so `target/` and `.git` never enter the context.
+- `STOPSIGNAL SIGKILL`: as PID 1 without a handler the binary ignores SIGTERM, and there is no state to flush.
+- Release profile stays at `opt-level = 3`: `z` saves 86 kB (12 %) but is up to ~10 % slower on glibc.
 
 ## Notes
 
@@ -219,4 +225,55 @@ Do exactly one step per session, in order. Each step is about 15–30 minutes.
 
 ## Report
 
-(Filled in by step 8.)
+Measured 2026-11-16 on the dev box (4 CPUs, rustc 1.100.0), server and wrk
+on the same host, so absolute numbers are only indicative.
+
+**Binary size** (stripped, fat LTO, `panic = "abort"`):
+
+| target                          | opt-level 3 | opt-level z |
+|---------------------------------|------------:|------------:|
+| x86_64-unknown-linux-musl (v2)  |   738 088 B |   652 072 B |
+| x86_64-unknown-linux-gnu (v1)   |   612 304 B |   526 992 B |
+
+The musl binary is a static PIE (`ldd`: statically linked, no `PT_INTERP`),
+has no AVX (`ymm`/`zmm`) instructions, runs and serves all pages (RSS ~1 MB
+idle). `file` is not installed; checked with `readelf`/`ldd`/`objdump`.
+
+**wrk -t2 -c50 -d10s on `/`** (identity body, 2330 B), req/s:
+
+| binary              | keep-alive  | `Connection: close` |
+|---------------------|------------:|--------------------:|
+| gnu, opt 3          | 206k – 209k |                 68k |
+| gnu, opt z          |        187k |                   – |
+| musl, opt 3         |   61k – 85k |                 39k |
+| musl, opt z         |   81k – 89k |                 39k |
+| gnu, before NODELAY |         585 |                 66k |
+
+Keep-alive latency avg ~0.17 ms (gnu). With `Connection: close` wrk counts
+every server close as a "read" socket error; a raw client sees a clean FIN
+and no resets, all responses are 200. The 585 req/s row is the 40 ms
+Nagle/delayed-ACK stall found in this step and fixed in tiny_http.
+
+**Tests:** `cargo test --release`: 26 unit + 3 robustness + 4 site
+integration = 33 pass (~4.5 s). `--features dev`: 30 unit + 3 robustness
+(site tests skipped). Clippy clean with and without `dev`.
+
+**Open items**
+- musl's allocator makes the prod (musl) binary ~2.5× slower than glibc
+  on keep-alive; tiny_http allocates per request. A faster global allocator
+  for the musl build (e.g. mimalloc) is the likely fix; not done (adds a C
+  dependency) and should be measured on the EPYC host first.
+- The Docker image was not built (no Docker here); the build stage was
+  simulated by building from a copy holding only the copied files.
+- tiny_http's own error responses (400/414/431/505) lack our security
+  headers and say `Server: tiny-http`; dev responses too.
+- A client that stops reading can hold a worker for up to `TIMEOUT` per
+  blocked write (only when pipelining; responses are ≤ ~10 kB).
+- Responses over 1 KiB still go out as two writes (headers, body); fine
+  with NODELAY, one write would save a syscall and a packet.
+- The page design was never checked in a real browser.
+
+### Step 8
+- `tests/site.rs`: real binary, `std::net` only; slugs from `posts/`, every post, index links, feed, 404, 301, 405, gzip/br, per-variant ETag/304, HEAD, pipelining, garbage and truncated requests. Server helper moved to `tests/common/mod.rs`.
+- wrk found keep-alive capped at 585 req/s (40 ms each): tiny_http writes headers and bodies over 1 KiB separately and Nagle waited for the delayed ACK. Fixed with `TCP_NODELAY` in the vendored tiny_http → ~206k req/s.
+- `Dockerfile` + allowlist `.dockerignore`; README rewritten (posts, env, dev mode, Docker, tests). Numbers and open items in **Report**.
