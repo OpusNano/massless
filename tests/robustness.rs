@@ -1,79 +1,10 @@
 //! Malformed, oversized, truncated and slow requests against the real binary.
 
-use std::io::{BufRead, BufReader, Read, Write};
-use std::net::{SocketAddr, TcpStream};
-use std::process::{Child, Command, Stdio};
+mod common;
+
+use common::Server;
+use std::io::{Read, Write};
 use std::time::{Duration, Instant};
-
-/// The server process; killed on drop.
-struct Server {
-    child: Child,
-    addr: SocketAddr,
-}
-
-impl Server {
-    /// Starts the binary on a free port with a 1 s timeout.
-    fn start() -> Server {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_massless"))
-            .env("LISTEN", "127.0.0.1:0")
-            .env("THREADS", "2")
-            .env("TIMEOUT", "1")
-            .stdout(Stdio::piped())
-            .spawn()
-            .expect("start server");
-        let mut line = String::new();
-        BufReader::new(child.stdout.take().unwrap())
-            .read_line(&mut line)
-            .unwrap();
-        // "massless listening on http://ADDR (N threads)"
-        let addr = line
-            .split("http://")
-            .nth(1)
-            .and_then(|s| s.split_whitespace().next())
-            .and_then(|s| s.parse().ok())
-            .unwrap_or_else(|| panic!("no address in {line:?}"));
-        Server { child, addr }
-    }
-
-    fn connect(&self) -> TcpStream {
-        let s = TcpStream::connect(self.addr).unwrap();
-        s.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
-        s
-    }
-
-    /// Sends raw bytes, returns everything until the server closes and how
-    /// long that took.
-    fn raw(&self, req: &[u8]) -> (String, Duration) {
-        let mut s = self.connect();
-        s.write_all(req).unwrap();
-        let start = Instant::now();
-        let mut out = Vec::new();
-        // A reset after the response is fine; we only look at what arrived.
-        let _ = s.read_to_end(&mut out);
-        (String::from_utf8_lossy(&out).into_owned(), start.elapsed())
-    }
-
-    fn status(&self, req: &[u8]) -> String {
-        let (resp, took) = self.raw(req);
-        assert!(took < Duration::from_secs(5), "took {took:?}");
-        resp.lines().next().unwrap_or("").to_string()
-    }
-
-    /// The server still answers a normal request.
-    fn assert_alive(&self) {
-        assert_eq!(
-            self.status(b"GET / HTTP/1.1\r\nConnection: close\r\n\r\n"),
-            "HTTP/1.1 200 OK"
-        );
-    }
-}
-
-impl Drop for Server {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-    }
-}
 
 #[test]
 fn bad_requests_get_an_error_and_close() {
