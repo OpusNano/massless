@@ -25,3 +25,8 @@ lto = "fat"
 codegen-units = 1
 panic = "abort"
 strip = true
+
+# tiny_http 0.12 with robustness fixes (timeouts, limits, no panics on input);
+# see vendor/tiny_http/PATCHES.md.
+[patch.crates-io]
+tiny_http = { path = "vendor/tiny_http" }
