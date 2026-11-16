@@ -25,9 +25,14 @@ impl Listener {
 
     pub(crate) fn accept(&self) -> std::io::Result<(Connection, Option<SocketAddr>)> {
         match self {
-            Self::Tcp(l) => l
-                .accept()
-                .map(|(conn, addr)| (Connection::from(conn), Some(addr))),
+            Self::Tcp(l) => l.accept().map(|(conn, addr)| {
+                // Patched: no Nagle. Headers and a body over the 1 KiB
+                // write buffer go out as two writes; with Nagle the second
+                // waited for the peer's delayed ACK (~40 ms per response
+                // on keep-alive connections).
+                let _ = conn.set_nodelay(true);
+                (Connection::from(conn), Some(addr))
+            }),
             #[cfg(unix)]
             Self::Unix(l) => l.accept().map(|(conn, _)| (Connection::from(conn), None)),
         }

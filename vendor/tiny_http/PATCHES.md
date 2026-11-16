@@ -23,5 +23,9 @@ Vendored from crates.io (first commit is the unchanged release) and used via
   on slow uploads.
 - **HTTP/2+ request line gives 505 and closes.** Before: writing the 505
   deadlocked the connection thread forever.
+- **TCP_NODELAY on accepted sockets.** Before: a response whose body
+  exceeds the 1 KiB write buffer is sent as two writes, and Nagle held the
+  second until the client's delayed ACK, so every keep-alive response took
+  ~40 ms (about 600 req/s for 50 connections).
 - API: `Limits`, `ServerConfig::limits`, `Server::http_with_limits`,
   `Server::from_listener_with_limits`. Upstream warnings are silenced.
