@@ -1,10 +1,12 @@
 //! massless: a tiny, fast Markdown blog server.
 
+mod http;
 #[cfg(test)]
 mod render;
 mod routes;
 
-use routes::{Method, Reply, route};
+use http::respond;
+use routes::Method;
 use std::{env, num::NonZeroUsize, process::exit, sync::Arc, thread};
 use tiny_http::{Header, Request, Response, Server, StatusCode};
 
@@ -56,27 +58,34 @@ fn handle(req: Request) {
         tiny_http::Method::Head => Method::Head,
         _ => Method::Other,
     };
-    let (status, body, headers) = match route(method, req.url()) {
-        Reply::Ok(p) => (200, p.body, vec![header("Content-Type", p.content_type)]),
-        Reply::Redirect(to) => (301, &[][..], vec![header("Location", to)]),
-        Reply::NotFound(p) => (404, p.body, vec![header("Content-Type", p.content_type)]),
-        Reply::MethodNotAllowed(p) => (
-            405,
-            p.body,
-            vec![
-                header("Content-Type", p.content_type),
-                header("Allow", "GET, HEAD"),
-            ],
-        ),
+    let values = |name: &'static str| {
+        req.headers()
+            .iter()
+            .filter(move |h| h.field.equiv(name))
+            .map(|h| h.value.as_str())
     };
-    let resp = Response::new(StatusCode(status), headers, body, Some(body.len()), None);
+    let out = respond(
+        method,
+        req.url(),
+        values("Accept-Encoding"),
+        values("If-None-Match"),
+    );
+    // tiny_http's API needs owned headers; all values are static ASCII.
+    let headers = out
+        .headers()
+        .iter()
+        .filter_map(|(n, v)| Header::from_bytes(n.as_bytes(), v.as_bytes()).ok())
+        .collect();
+    let body = out.body;
+    let resp = Response::new(
+        StatusCode(out.status),
+        headers,
+        body,
+        Some(body.len()),
+        None,
+    )
+    // Always send Content-Length, never chunked.
+    .with_chunked_threshold(usize::MAX);
     // Errors here mean the client went away; nothing to do.
     let _ = req.respond(resp);
-}
-
-fn header(name: &'static str, value: &'static str) -> Header {
-    Header {
-        field: name.parse().expect("static header name"),
-        value: value.parse().expect("static header value"),
-    }
 }

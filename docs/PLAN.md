@@ -117,7 +117,7 @@ Do exactly one step per session, in order. Each step is about 15–30 minutes.
   index, post pages, Atom feed, 404, `/posts` redirect, minimal templates.
   `cargo:rerun-if-changed` for `posts/` and `templates/`. The route table is
   generated.
-- [ ] **4. HTTP semantics.** Build-time gzip + brotli variants, strong ETags,
+- [x] **4. HTTP semantics.** Build-time gzip + brotli variants, strong ETags,
   Accept-Encoding negotiation, If-None-Match → 304, HEAD, Cache-Control,
   Vary, security headers. Unit tests for negotiation and ETag/304.
 - [ ] **5. Page design.** One small inlined CSS: typography, dark mode,
@@ -152,6 +152,15 @@ Do exactly one step per session, in order. Each step is about 15–30 minutes.
 - Frontmatter `date` wins over the file name date; a `HH-MM-SS` in the file name only sets the time (sort order, feed `updated`). Unknown frontmatter keys are ignored.
 - Templates use one-pass `{{name}}` substitution; unknown placeholders fail the build. Site title is the constant `SITE_TITLE` in `src/render.rs`.
 - Generated route table is sorted and looked up with binary search; `/posts` -> `/` is a 301 from a small static redirect list in `routes.rs` (`/posts/` stays 404).
+- Gzip via `zopfli` (smaller than flate2, build-dep only), brotli quality 11 / lgwin 22; both build-deps only.
+- ETag = 64-bit FNV-1a of the identity body in hex, plus `-gz`/`-br` for compressed variants; no hash crate.
+- HTTP semantics live in pure `src/http.rs` (`respond() -> Out` with a fixed-size static header array); main.rs only converts to tiny_http headers (that conversion allocates; tiny_http's API needs owned headers).
+- Accept-Encoding: br > gzip > identity among codings with q>0 (explicit entry wins over `*`, `x-gzip` = gzip); identity is always served, never 406.
+- If-None-Match uses weak comparison against the selected variant's ETag, `*` matches; 304 omits Content-Type/Encoding but keeps Vary, ETag, Cache-Control.
+- 304 and HEAD pass the real body to tiny_http, which sends only its `Content-Length` (equal to the 200's, as RFC 9110 allows) and no body.
+- `with_chunked_threshold(usize::MAX)`: always `Content-Length`, never chunked; `Server: massless` replaces tiny_http's default.
+- 404 is compressed and gets Vary + `no-cache` but no ETag/304; 301 and 405 are uncompressed with no caching headers.
+- CSP: `default-src 'none'; style-src 'unsafe-inline'; img-src * data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`, on every response.
 
 ## Notes
 
@@ -173,6 +182,11 @@ Do exactly one step per session, in order. Each step is about 15–30 minutes.
 - `build.rs` writes each body to `OUT_DIR` and generates `site.rs` (`PAGES`, `NOT_FOUND`) with `include_bytes!`; `routes.rs` includes it. `rerun-if-changed` on `posts`, `templates`, `src/render.rs`; adding/removing a post rebuilds.
 - Malformed post fails the build, e.g. `error: massless: posts/2026-10-01-bad.md: missing `title` in frontmatter`.
 - 15 unit tests (render + routing). By hand: `/` 626 B, post 6.8 kB, feed 6.9 kB, `/posts` 301, 404 page. Release binary: 579 kB.
+
+### Step 4
+- `build.rs` writes identity, `-gz` (zopfli) and `-br` variants per page (kept only if smaller) and strong ETags into the generated table; `src/http.rs` does negotiation, 304, Cache-Control, Vary and security headers. 25 unit tests total.
+- Sizes (identity / gzip / br): index 626 / 383 / 238 B, post 6847 / 3102 / 2386 B, feed 6948 / 3056 / 2395 B, 404 581 / 370 / 211 B.
+- By hand with curl: br/gzip/identity picked correctly, gzip decodes back to the identity body (no brotli CLI here to decode br by hand), 304 with `If-None-Match`, HEAD, 404, 301, 405. A keep-alive connection stays in sync after a 304 and a HEAD (bodies are not sent). `cargo tree -e normal` still shows only tiny_http. Release binary: 602 kB.
 
 ## Report
 
