@@ -112,7 +112,7 @@ Do exactly one step per session, in order. Each step is about 15–30 minutes.
   route table with a couple of hardcoded embedded responses, 404, 405, HEAD.
   Unit tests for routing. Check by hand that a held-open keep-alive
   connection doesn't block a second client.
-- [ ] **3. Build-time rendering.** `build.rs` + shared render module:
+- [x] **3. Build-time rendering.** `build.rs` + shared render module:
   frontmatter parsing (with filename-date fallback), pulldown-cmark options,
   index, post pages, Atom feed, 404, `/posts` redirect, minimal templates.
   `cargo:rerun-if-changed` for `posts/` and `templates/`. The route table is
@@ -146,6 +146,12 @@ Do exactly one step per session, in order. Each step is about 15–30 minutes.
 - tiny_http 0.12 with default features off (no TLS); it suppresses HEAD bodies itself, so routing treats HEAD like GET.
 - Routing lives in pure `src/routes.rs` (`route(Method, url) -> Reply`) so it is unit-testable without sockets; main.rs only maps it to tiny_http.
 - Bad `THREADS` value exits with an error instead of silently using the default.
+- pulldown-cmark 0.13 (default features off, `html` only) is a build-dep and a dev-dep (for render unit tests); `cargo tree -e normal` shows only tiny_http.
+- Markdown headings are shifted down one level (`#` -> `<h2>`) so the post title is the page's only `<h1>`.
+- Feed links use build-time env `SITE_URL` (default empty = site-relative links); Atom ids are `tag:massless,<date>:<slug>` so they don't depend on it.
+- Frontmatter `date` wins over the file name date; a `HH-MM-SS` in the file name only sets the time (sort order, feed `updated`). Unknown frontmatter keys are ignored.
+- Templates use one-pass `{{name}}` substitution; unknown placeholders fail the build. Site title is the constant `SITE_TITLE` in `src/render.rs`.
+- Generated route table is sorted and looked up with binary search; `/posts` -> `/` is a 301 from a small static redirect list in `routes.rs` (`/posts/` stays 404).
 
 ## Notes
 
@@ -161,6 +167,12 @@ Do exactly one step per session, in order. Each step is about 15–30 minutes.
 - Manual check, `THREADS=2`: 3 held-open keep-alive connections, 4 more curl requests still answered in <1 ms each. tiny_http reads each connection on its own internal pool thread (that pool grows as needed), so idle connections don't use up our workers.
 - A truncated request (`GET / HTTP/1.1\r\nHo`) currently waits forever on its connection (others are unaffected); timeouts are step 6.
 - Release binary: 563 kB.
+
+### Step 3
+- `src/render.rs` (pulled into `build.rs` via `#[path]`, into the binary only for tests): file name + frontmatter parsing with date fallback and validation, pulldown-cmark (tables, footnotes, strikethrough, task lists, smart punctuation), index, post pages, Atom feed, 404. `templates/layout.html` + `templates/style.css` (minimal; design is step 5).
+- `build.rs` writes each body to `OUT_DIR` and generates `site.rs` (`PAGES`, `NOT_FOUND`) with `include_bytes!`; `routes.rs` includes it. `rerun-if-changed` on `posts`, `templates`, `src/render.rs`; adding/removing a post rebuilds.
+- Malformed post fails the build, e.g. `error: massless: posts/2026-10-01-bad.md: missing `title` in frontmatter`.
+- 15 unit tests (render + routing). By hand: `/` 626 B, post 6.8 kB, feed 6.9 kB, `/posts` 301, 404 page. Release binary: 579 kB.
 
 ## Report
 

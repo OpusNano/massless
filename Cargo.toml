@@ -9,6 +9,14 @@ publish = false
 [dependencies]
 tiny_http = { version = "0.12", default-features = false }
 
+# Rendering happens in build.rs; the runtime binary has no Markdown code.
+[build-dependencies]
+pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
+
+# Only for the render module unit tests.
+[dev-dependencies]
+pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
+
 [profile.release]
 opt-level = 3
 lto = "fat"

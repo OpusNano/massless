@@ -1,5 +1,7 @@
 //! massless: a tiny, fast Markdown blog server.
 
+#[cfg(test)]
+mod render;
 mod routes;
 
 use routes::{Method, Reply, route};
@@ -54,22 +56,20 @@ fn handle(req: Request) {
         tiny_http::Method::Head => Method::Head,
         _ => Method::Other,
     };
-    let (status, page, allow) = match route(method, req.url()) {
-        Reply::Ok(p) => (200, p, false),
-        Reply::NotFound(p) => (404, p, false),
-        Reply::MethodNotAllowed(p) => (405, p, true),
+    let (status, body, headers) = match route(method, req.url()) {
+        Reply::Ok(p) => (200, p.body, vec![header("Content-Type", p.content_type)]),
+        Reply::Redirect(to) => (301, &[][..], vec![header("Location", to)]),
+        Reply::NotFound(p) => (404, p.body, vec![header("Content-Type", p.content_type)]),
+        Reply::MethodNotAllowed(p) => (
+            405,
+            p.body,
+            vec![
+                header("Content-Type", p.content_type),
+                header("Allow", "GET, HEAD"),
+            ],
+        ),
     };
-    let mut headers = vec![header("Content-Type", page.content_type)];
-    if allow {
-        headers.push(header("Allow", "GET, HEAD"));
-    }
-    let resp = Response::new(
-        StatusCode(status),
-        headers,
-        page.body,
-        Some(page.body.len()),
-        None,
-    );
+    let resp = Response::new(StatusCode(status), headers, body, Some(body.len()), None);
     // Errors here mean the client went away; nothing to do.
     let _ = req.respond(resp);
 }
