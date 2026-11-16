@@ -124,7 +124,7 @@ Do exactly one step per session, in order. Each step is about 15–30 minutes.
   mobile layout. Proper `<head>` (charset, viewport, title, description,
   feed link). Check page sizes (aim for an index well under 10 kB
   uncompressed).
-- [ ] **6. Robustness.** Malformed, truncated and oversized requests, slow
+- [x] **6. Robustness.** Malformed, truncated and oversized requests, slow
   clients (read/write timeouts), bounded threads, no panics on input. Test
   with raw sockets (e.g. `printf 'GET / HTTP/1.1\r\nHo' | nc`) and add unit or
   integration tests where cheap.
@@ -164,6 +164,11 @@ Do exactly one step per session, in order. Each step is about 15–30 minutes.
 - Page description: frontmatter `summary`, else the first paragraph's plain text cut at a word boundary to 160 chars + "…"; index uses `SITE_DESCRIPTION`.
 - CSS is hand-written compact (one rule per line) in `templates/style.css`, no build-time minifier; colors via custom properties, dark mode overrides them.
 - `<link rel="icon" href="data:,">` stops browsers from requesting `/favicon.ico` (a 404) on every page; CSP already allows `data:` images.
+- tiny_http 0.12 can't be made robust from outside (no timeouts, unbounded threads/heads, panics/aborts on input), so it is vendored in `vendor/tiny_http` with a small marked patch (`PATCHES.md`) via `[patch.crates-io]`, rather than replaced.
+- New env `TIMEOUT` (seconds, default 10): per-socket read/write timeout and per-request head deadline (= keep-alive idle timeout); also lets tests run fast.
+- Max 500 open connections (constant `MAX_CONNECTIONS`, 2 fds each, under a 1024-fd soft limit); extra clients wait in the listen backlog instead of being refused.
+- Any request with a body (non-zero `Content-Length` or `Transfer-Encoding`) closes the connection after its response; bodies are never read or drained.
+- If `server.recv()` ever fails, the process exits with an error (a supervisor restarts it) instead of leaving a worker silently gone.
 
 ## Notes
 
@@ -193,6 +198,13 @@ Do exactly one step per session, in order. Each step is about 15–30 minutes.
 ### Step 5
 - `templates/style.css`: system font stack, 68ch measure, 1.65 line height, light/dark palettes via `prefers-color-scheme`, fluid padding, styles for code, tables (scroll on narrow screens), blockquotes, footnotes and the index list. Layout gets a footer with the feed link and an empty data: favicon.
 - Sizes (identity / gzip / br): index 2330 / 1136 / 903 B, post 8683 / 3862 / 3087 B, 404 2274 / 1113 / 863 B; a test keeps the index under 8 kB. No browser is installed here, so the look was not checked visually. Release binary: 611 kB.
+
+### Step 6
+- Probed with raw sockets; found in tiny_http 0.12: a huge `Content-Length` aborted the process (it allocated that much when dropping the request); a truncated, idle or byte-by-byte request held its connection and thread forever; an `HTTP/2.0` request line deadlocked its connection thread forever; with fds exhausted (`prlimit --nofile=40`) the accept loop stopped for good and the process stayed up refusing every connection; unbounded threads and header sizes.
+- Fixed in the vendored, patched tiny_http (see Decisions and `vendor/tiny_http/PATCHES.md`). Now: 400 garbage / non-ASCII, 414 long URI, 431 big or many headers, 505 HTTP/2+, 417 bad `Expect`, all then close; truncated, idle and slow requests are closed after `TIMEOUT`; the server keeps serving after fd exhaustion; 700 held connections → ~506 server threads, and a new client is still served.
+- `tests/robustness.rs`: 3 integration tests on the real binary with `TIMEOUT=1` (~3.5 s). Total 29 tests.
+- A 1 s connect stall at ~160 rapid connections also happens with the unpatched build (client SYN retry), not a regression.
+- Open: a client that stops reading can hold a worker for up to `TIMEOUT` per blocked write (responses are ≤ ~10 kB, so only when pipelining); tiny_http's own error responses (400/414/431/505) lack our security headers and say `Server: tiny-http`. Release binary: 612 kB.
 
 ## Report
 

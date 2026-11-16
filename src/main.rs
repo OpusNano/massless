@@ -7,22 +7,29 @@ mod routes;
 
 use http::respond;
 use routes::Method;
-use std::{env, num::NonZeroUsize, process::exit, sync::Arc, thread};
-use tiny_http::{Header, Request, Response, Server, StatusCode};
+use std::{env, num::NonZeroUsize, process::exit, sync::Arc, thread, time::Duration};
+use tiny_http::{Header, Limits, Request, Response, Server, StatusCode};
+
+/// Most open connections. Each costs a tiny_http thread and two file
+/// descriptors, so this stays below the common soft limit of 1024 fds.
+const MAX_CONNECTIONS: usize = 500;
 
 fn main() {
     let listen = env::var("LISTEN").unwrap_or_else(|_| "0.0.0.0:8420".into());
-    let threads = match env::var("THREADS") {
-        Ok(s) => match s.parse::<usize>() {
-            Ok(n) if n > 0 => n,
-            _ => fail(&format!("THREADS must be a positive integer, got {s:?}")),
-        },
-        Err(_) => thread::available_parallelism()
+    let threads = env_positive("THREADS").unwrap_or_else(|| {
+        thread::available_parallelism()
             .map_or(2, NonZeroUsize::get)
-            .max(2),
-    };
+            .max(2)
+    });
+    // Seconds a client may take to send a request head (also the keep-alive
+    // idle timeout) and per blocked socket read or write.
+    let timeout = env_positive("TIMEOUT").unwrap_or(10);
 
-    let server = match Server::http(&listen) {
+    let limits = Limits {
+        timeout: Some(Duration::from_secs(timeout as u64)),
+        max_connections: MAX_CONNECTIONS,
+    };
+    let server = match Server::http_with_limits(&listen, limits) {
         Ok(s) => Arc::new(s),
         Err(e) => fail(&format!("cannot listen on {listen}: {e}")),
     };
@@ -35,15 +42,28 @@ fn main() {
         .map(|_| {
             let server = Arc::clone(&server);
             thread::spawn(move || {
-                // recv() only fails when the server shuts down.
-                while let Ok(req) = server.recv() {
-                    handle(req);
+                loop {
+                    match server.recv() {
+                        Ok(req) => handle(req),
+                        // Can't happen with the patched tiny_http; exit so a
+                        // supervisor restarts us rather than hanging.
+                        Err(e) => fail(&format!("server stopped: {e}")),
+                    }
                 }
             })
         })
         .collect();
     for w in workers {
         let _ = w.join();
+    }
+}
+
+/// A positive integer from env var `name`, `None` if unset; exits if invalid.
+fn env_positive(name: &str) -> Option<usize> {
+    let s = env::var(name).ok()?;
+    match s.parse::<usize>() {
+        Ok(n) if n > 0 => Some(n),
+        _ => fail(&format!("{name} must be a positive integer, got {s:?}")),
     }
 }
 
