@@ -1,6 +1,6 @@
 //! Site rendering: posts + templates -> finished pages.
 //!
-//! Shared by `build.rs` (via `#[path]`) and dev mode. Pure except for
+//! Used by `build.rs` (via `#[path]`) and its unit tests. Pure except for
 //! `load`, which reads the input directories.
 
 use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd, html};

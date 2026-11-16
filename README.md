@@ -40,7 +40,8 @@ cargo run --release                        # http://0.0.0.0:8420
 LISTEN=127.0.0.1:8080 THREADS=4 cargo run --release
 ```
 
-Content is compiled in, so edit posts, then rebuild. URLs: `/`,
+Content is compiled in: to preview, edit posts or templates, run
+`cargo run --release` again (build.rs re-renders) and reload the browser. URLs: `/`,
 `/posts/<slug>`, `/feed.xml` (`/posts` redirects to `/`).
 
 | Variable   | Default                   | Meaning                                                        |
@@ -49,17 +50,6 @@ Content is compiled in, so edit posts, then rebuild. URLs: `/`,
 | `THREADS`  | CPU count (at least 2)    | Worker threads.                                                |
 | `TIMEOUT`  | `10`                      | Seconds for a request head, an idle keep-alive, a socket read/write. |
 | `SITE_URL` | empty (relative links)    | **Build time**: absolute base URL for feed links, e.g. `https://example.org`. |
-
-## Dev mode
-
-```sh
-cargo run --features dev
-```
-
-Re-renders `posts/` and `templates/` in memory whenever they change and
-reloads open browser tabs (server-sent events on `/events`). Pages are
-uncompressed and carry a small reload script. A broken post shows an error
-page until it is fixed. None of this is in the default build.
 
 ## Deployment
 
@@ -71,7 +61,6 @@ Pushes to `master` are tested in CI and published as
 
 ```sh
 cargo test --release                 # unit + integration tests (real binary)
-cargo test --release --features dev
 cargo clippy --release --all-targets -- -D warnings
 ```
 

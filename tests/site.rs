@@ -1,7 +1,4 @@
 //! End-to-end checks of every generated page against the real binary.
-//! Dev mode serves uncompressed, re-rendered pages, so this is for the
-//! default build only.
-#![cfg(not(feature = "dev"))]
 
 mod common;
 
