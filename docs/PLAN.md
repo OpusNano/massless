@@ -99,7 +99,7 @@ gold-plating.
 
 Do exactly one step per session, in order. Each step is about 15–30 minutes.
 
-- [ ] **1. Clean slate + skeleton.** In one commit, remove all Zig
+- [x] **1. Clean slate + skeleton.** In one commit, remove all Zig
   code/tooling (`build.zig`, `src/*.zig`, `Dockerfile`, `.dockerignore`,
   `tools/integration_test.sh`, `public/`, Zig entries in `.gitignore`).
   Keep `posts/2026-09-12-salyut-7-rescue.md` unchanged, plus `LICENSE`,
@@ -142,9 +142,15 @@ Do exactly one step per session, in order. Each step is about 15–30 minutes.
 
 (Record technical decisions made during unattended sessions here, one line each.)
 
+- No `.cargo/config.toml`: rustc's default `x86_64-unknown-linux-gnu` baseline is x86-64 (v1), already within the "v2 at most" limit.
+
 ## Notes
 
 (One short subsection per finished step: what was done, anything surprising.)
+
+### Step 1
+- Removed all Zig code/tooling, `public/`, Dockerfile and Zig `.gitignore` entries; README is a stub.
+- Cargo skeleton (edition 2024, release profile per spec, no deps). Toolchain: rustc 1.100.0. Empty release binary: 289 kB.
 
 ## Report
 

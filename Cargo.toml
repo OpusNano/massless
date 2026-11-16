@@ -1,0 +1,16 @@
+[package]
+name = "massless"
+version = "0.1.0"
+edition = "2024"
+description = "Tiny, fast Markdown blog server"
+license-file = "LICENSE"
+publish = false
+
+[dependencies]
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
