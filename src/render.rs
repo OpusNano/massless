@@ -131,7 +131,7 @@ pub fn render(input: &Input, site_url: &str) -> Result<Site, String> {
     let not_found = page(
         &format!("Not found — {SITE_TITLE}"),
         "Page not found",
-        "<h1>Not found</h1>\n<p>No such page. <a href=\"/\">Back to the index</a>.</p>\n",
+        "<h1>404: not found</h1>\n<p>No such file or directory. <a href=\"/\">cd ~</a></p>\n",
     )?;
     Ok(Site { pages, not_found })
 }
@@ -140,7 +140,7 @@ fn index_html(posts: &[Post]) -> String {
     if posts.is_empty() {
         return "<p>No posts yet.</p>\n".into();
     }
-    let mut s = String::from("<ul class=\"posts\">\n");
+    let mut s = String::from("<p class=\"cmd\">ls -t posts/</p>\n<ul class=\"posts\">\n");
     for p in posts {
         s += &format!(
             "<li><time datetime=\"{d}\">{d}</time> <a href=\"/posts/{}\">{}</a>",

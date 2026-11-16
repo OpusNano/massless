@@ -3,16 +3,17 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#1d2021">
 <title>{{title}}</title>
 <meta name="description" content="{{description}}">
 <link rel="alternate" type="application/atom+xml" title="{{site}}" href="/feed.xml">
-<link rel="icon" href="data:,">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' fill='%231d2021'/><path d='M3 4l4 4-4 4m5 0h5' fill='none' stroke='%23d79921' stroke-width='2'/></svg>">
 <style>{{style}}</style>
 </head>
 <body>
-<header><a href="/">{{site}}</a></header>
+<header><a class="home" href="/">~/{{site}}</a><span class="ps"> $</span><nav><a href="/">posts</a><a href="/feed.xml">feed</a></nav></header>
 <main>
 {{content}}</main>
-<footer><a href="/feed.xml">Atom feed</a></footer>
+<footer><span class="ps">~/{{site}} $</span> <a href="/feed.xml">cat feed.xml</a></footer>
 </body>
 </html>
