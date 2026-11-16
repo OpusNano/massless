@@ -18,4 +18,5 @@ questions.
    session without committing.
 
 Work only on `master`; never touch other branches. Never force-push or
-rewrite history. Never install Docker. Never write secrets. Never use `target-cpu=native`.
+rewrite history. Never install Docker. Never write secrets. Never use
+`target-cpu=native`.
