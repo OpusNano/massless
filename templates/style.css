@@ -1,7 +1,7 @@
 :root{color-scheme:dark;--bg:#1d2021;--bg2:#282828;--line:#3c3836;--fg:#ebdbb2;--hi:#fbf1c7;--sub:#a89984;--mute:#928374;--a:#d79921;--a2:#fabd2f}
 *{box-sizing:border-box}
 html{background:var(--bg);-webkit-text-size-adjust:100%;text-size-adjust:100%}
-body{max-width:calc(70ch + 2.5rem);margin:0 auto;padding:1.25rem 1.25rem 2rem;font:15px/1.6 "DejaVu Sans Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:var(--fg);overflow-wrap:break-word}
+body{display:flex;flex-direction:column;min-height:100vh;min-height:100dvh;max-width:calc(70ch + 2.5rem);margin:0 auto;padding:1.25rem 1.25rem 2rem;font:15px/1.6 "DejaVu Sans Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:var(--fg);overflow-wrap:break-word}
 @media(min-width:48em){body{font-size:16px;padding-top:2rem}}
 ::selection{background:#b57614;color:var(--bg)}
 a{color:var(--a);text-decoration-thickness:1px;text-underline-offset:.2em}
@@ -13,6 +13,7 @@ header a,footer a,.posts a{text-decoration:none}
 .home{color:var(--hi);font-weight:700}
 .ps,time{color:var(--mute)}
 nav{margin-left:auto;display:flex;gap:2ch}
+main{flex:1}
 footer{margin-top:3rem;padding-top:.75rem;border-top:1px solid var(--line)}
 footer::after{content:"█";color:var(--mute);animation:blink 1s step-end infinite}
 @keyframes blink{50%{opacity:0}}
