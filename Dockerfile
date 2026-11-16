@@ -19,6 +19,7 @@ RUN cargo build --release --locked --target x86_64-unknown-linux-musl \
     && cp target/x86_64-unknown-linux-musl/release/massless /massless
 
 FROM scratch
+LABEL org.opencontainers.image.source=https://github.com/OpusNano/massless
 COPY --from=build /massless /massless
 USER 65532:65532
 EXPOSE 8420

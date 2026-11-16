@@ -61,17 +61,11 @@ reloads open browser tabs (server-sent events on `/events`). Pages are
 uncompressed and carry a small reload script. A broken post shows an error
 page until it is fixed. None of this is in the default build.
 
-## Docker
+## Deployment
 
-```sh
-docker build -t massless --build-arg SITE_URL=https://example.org .
-docker run -d -p 8420:8420 massless
-```
-
-Multi-stage build: a static `x86_64-unknown-linux-musl` binary (CPU
-baseline x86-64-v2), copied into an empty `scratch` image that runs as
-UID 65532. Posts are baked in, so there are no volumes; rebuild the image
-to publish.
+Pushes to `master` are tested in CI and published as
+`ghcr.io/opusnano/massless:latest` and `:sha-<short>`; production pulls
+`latest` automatically.
 
 ## Development
 
