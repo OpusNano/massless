@@ -29,7 +29,7 @@ pub(crate) static NOT_ALLOWED: Page = Page {
 };
 
 /// Old URLs that now live elsewhere: (from, to).
-static REDIRECTS: &[(&str, &str)] = &[("/posts", "/")];
+pub(crate) static REDIRECTS: &[(&str, &str)] = &[("/posts", "/")];
 
 /// Request methods we distinguish.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

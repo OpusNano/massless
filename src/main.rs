@@ -1,8 +1,13 @@
 //! massless: a tiny, fast Markdown blog server.
 
+#[cfg(feature = "dev")]
+mod dev;
+// Dev mode replaces the static handler but reuses routing bits.
+#[cfg_attr(feature = "dev", allow(dead_code))]
 mod http;
-#[cfg(test)]
+#[cfg(any(test, feature = "dev"))]
 mod render;
+#[cfg_attr(feature = "dev", allow(dead_code))]
 mod routes;
 
 use http::respond;
@@ -38,13 +43,20 @@ fn main() {
         None => println!("massless listening on {listen} ({threads} threads)"),
     }
 
+    #[cfg(feature = "dev")]
+    let dev = dev::start();
     let workers: Vec<_> = (0..threads)
         .map(|_| {
             let server = Arc::clone(&server);
+            #[cfg(feature = "dev")]
+            let dev = Arc::clone(&dev);
             thread::spawn(move || {
                 loop {
                     match server.recv() {
+                        #[cfg(not(feature = "dev"))]
                         Ok(req) => handle(req),
+                        #[cfg(feature = "dev")]
+                        Ok(req) => dev.handle(req),
                         // Can't happen with the patched tiny_http; exit so a
                         // supervisor restarts us rather than hanging.
                         Err(e) => fail(&format!("server stopped: {e}")),
@@ -72,6 +84,7 @@ fn fail(msg: &str) -> ! {
     exit(1)
 }
 
+#[cfg_attr(feature = "dev", allow(dead_code))]
 fn handle(req: Request) {
     let method = match req.method() {
         tiny_http::Method::Get => Method::Get,

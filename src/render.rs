@@ -1,6 +1,6 @@
 //! Site rendering: posts + templates -> finished pages.
 //!
-//! Shared by `build.rs` (via `#[path]`) and, later, dev mode. Pure except for
+//! Shared by `build.rs` (via `#[path]`) and dev mode. Pure except for
 //! `load`, which reads the input directories.
 
 use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd, html};
@@ -392,7 +392,7 @@ fn excerpt(md: &str, max: usize) -> Option<String> {
 }
 
 /// Escape text for HTML and XML content and attributes.
-fn escape(s: &str) -> String {
+pub fn escape(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
         match c {

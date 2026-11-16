@@ -8,6 +8,12 @@ publish = false
 
 [dependencies]
 tiny_http = { version = "0.12", default-features = false }
+# Dev mode only (feature `dev`): re-renders in memory at runtime.
+pulldown-cmark = { version = "0.13", default-features = false, features = ["html"], optional = true }
+
+[features]
+# Live re-rendering with browser reload over SSE. Off by default.
+dev = ["dep:pulldown-cmark"]
 
 # Rendering happens in build.rs; the runtime binary has no Markdown code.
 [build-dependencies]

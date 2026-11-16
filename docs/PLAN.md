@@ -128,7 +128,7 @@ Do exactly one step per session, in order. Each step is about 15–30 minutes.
   clients (read/write timeouts), bounded threads, no panics on input. Test
   with raw sockets (e.g. `printf 'GET / HTTP/1.1\r\nHo' | nc`) and add unit or
   integration tests where cheap.
-- [ ] **7. Dev mode.** `dev` feature: mtime polling of `posts/` + `templates/`,
+- [x] **7. Dev mode.** `dev` feature: mtime polling of `posts/` + `templates/`,
   in-memory re-render, SSE `/events` reload. Confirm that the default build
   pulls in none of it (`cargo tree`, binary size unchanged).
 - [ ] **8. Ship.** Integration test (see Tests), multi-stage Dockerfile
@@ -169,6 +169,11 @@ Do exactly one step per session, in order. Each step is about 15–30 minutes.
 - Max 500 open connections (constant `MAX_CONNECTIONS`, 2 fds each, under a 1024-fd soft limit); extra clients wait in the listen backlog instead of being refused.
 - Any request with a body (non-zero `Content-Length` or `Transfer-Encoding`) closes the connection after its response; bodies are never read or drained.
 - If `server.recv()` ever fails, the process exits with an error (a supervisor restarts it) instead of leaving a worker silently gone.
+- Dev mode: pulldown-cmark is an optional runtime dep enabled only by `dev`; `src/dev.rs` and the runtime `render` module are `cfg(feature = "dev")`, so the default binary is byte-identical.
+- Dev mode reads `posts/` and `templates/` under `CARGO_MANIFEST_DIR` (works from any cwd with `cargo run --features dev`), polls mtimes + sizes every 250 ms.
+- Dev reload: each render gets a clock-based version embedded in its pages; `/events` sends the current version on connect and on change (`: ping` every 15 s), and the page reloads if it differs, so reconnects and server restarts reload only when needed.
+- SSE clients take the request via `Request::into_writer()` and run on their own thread; a render error is served as a 500 page (with the reload script) instead of exiting.
+- Dev responses: uncompressed, `Cache-Control: no-store`, a CSP that allows the inline script and `connect-src 'self'`.
 
 ## Notes
 
@@ -205,6 +210,12 @@ Do exactly one step per session, in order. Each step is about 15–30 minutes.
 - `tests/robustness.rs`: 3 integration tests on the real binary with `TIMEOUT=1` (~3.5 s). Total 29 tests.
 - A 1 s connect stall at ~160 rapid connections also happens with the unpatched build (client SYN retry), not a regression.
 - Open: a client that stops reading can hold a worker for up to `TIMEOUT` per blocked write (responses are ≤ ~10 kB, so only when pipelining); tiny_http's own error responses (400/414/431/505) lack our security headers and say `Server: tiny-http`. Release binary: 612 kB.
+
+### Step 7
+- `cargo run --features dev`: renders in memory, injects `<script>` (EventSource) before `</body>` of HTML pages only (not the feed), re-renders on change. 4 unit tests (`cargo test --release --features dev`: 30 + 3 pass; clippy clean with and without `dev`).
+- By hand with `THREADS=2`: 3 open `/events` clients and `/` is still served; adding a post shows it and pushes a new version to all clients; a broken post gives a 500 error page and the log line; deleting it recovers.
+- Default build: same SHA-256 as before the step (612 224 B), `cargo tree -e normal` has no pulldown-cmark, no `EventSource` strings. Dev binary: 1.04 MB.
+- Edition 2024 reserves `gen`, hence `version`. Dev responses still say `Server: tiny-http (Rust)`; harmless.
 
 ## Report
 
