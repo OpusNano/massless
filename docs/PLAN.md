@@ -3,8 +3,8 @@
 ## Goal
 
 Rewrite massless (a tiny Markdown blog server, Zig version tagged `zig-final`)
-from scratch in Rust on branch `rust`. Same job: serve the posts in `posts/`
-as a small, fast blog. All pages are rendered and compressed at build time;
+from scratch in Rust (developed on branch `rust`, now merged into `master`).
+Same job: serve the posts in `posts/` as a small, fast blog. All pages are rendered and compressed at build time;
 the server only looks up and sends ready-made bytes.
 
 Priorities, in order: **speed**, **performance**, **leanness** (small binary,

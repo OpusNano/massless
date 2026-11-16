@@ -16,7 +16,7 @@ cd "$(dirname "$0")/.." || exit 1
 mkdir -p .loop
 exec 9>.loop/lock
 flock -n 9 || { echo "another loop is already running" >&2; exit 1; }
-[ "$(git branch --show-current)" = rust ] || { echo "not on branch rust" >&2; exit 1; }
+[ "$(git branch --show-current)" = master ] || { echo "not on branch master" >&2; exit 1; }
 
 ran=0
 push_fails=0
@@ -64,7 +64,7 @@ for ((n = 1; n <= steps; n++)); do
 		cargo clippy --release --all-targets -- -D warnings >".loop/$ts-step$n-clippy.log" 2>&1 ||
 			finish 1 "clippy failed, see .loop/$ts-step$n-clippy.log"
 	fi
-	if git push -q origin rust; then
+	if git push -q origin master; then
 		push_fails=0
 	else
 		push_fails=$((push_fails + 1))
