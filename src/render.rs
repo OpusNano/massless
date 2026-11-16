@@ -7,6 +7,7 @@ use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd, html};
 use std::{fs, path::Path};
 
 pub const SITE_TITLE: &str = "massless";
+pub const SITE_DESCRIPTION: &str = "A small, fast blog.";
 pub const HTML: &str = "text/html; charset=utf-8";
 pub const ATOM: &str = "application/atom+xml; charset=utf-8";
 
@@ -41,6 +42,8 @@ struct Post {
     /// HH:MM:SS (from the file name, else midnight)
     time: String,
     summary: Option<String>,
+    /// Meta description: the summary, else the start of the first paragraph.
+    description: String,
     html: String,
 }
 
@@ -101,7 +104,7 @@ pub fn render(input: &Input, site_url: &str) -> Result<Site, String> {
         Output {
             path: "/".into(),
             content_type: HTML,
-            body: page(SITE_TITLE, SITE_TITLE, &index_html(&posts))?,
+            body: page(SITE_TITLE, SITE_DESCRIPTION, &index_html(&posts))?,
         },
         Output {
             path: "/feed.xml".into(),
@@ -117,11 +120,10 @@ pub fn render(input: &Input, site_url: &str) -> Result<Site, String> {
             d = p.date,
         );
         let title = format!("{} — {SITE_TITLE}", p.title);
-        let desc = p.summary.as_deref().unwrap_or(&p.title);
         pages.push(Output {
             path: format!("/posts/{}", p.slug),
             content_type: HTML,
-            body: page(&title, desc, &content)?,
+            body: page(&title, &p.description, &content)?,
         });
     }
     pages.sort_by(|a, b| a.path.cmp(&b.path));
@@ -219,12 +221,17 @@ fn parse_post(name: &str, text: &str) -> Result<Post, String> {
         Some(d) => return Err(format!("bad `date` {d:?}, expected YYYY-MM-DD")),
         None => file_date,
     };
+    let description = match &summary {
+        Some(s) => s.clone(),
+        None => excerpt(body, 160).unwrap_or_else(|| title.clone()),
+    };
     Ok(Post {
         slug,
         title,
         date,
         time,
         summary,
+        description,
         html: markdown(body),
     })
 }
@@ -358,6 +365,32 @@ fn markdown(md: &str) -> String {
     out
 }
 
+/// Plain text of the first paragraph, cut at a word boundary to at most
+/// `max` chars (plus "…").
+fn excerpt(md: &str, max: usize) -> Option<String> {
+    let mut text = String::new();
+    let mut inside = false;
+    for e in Parser::new_ext(md, Options::ENABLE_SMART_PUNCTUATION) {
+        match e {
+            Event::Start(Tag::Paragraph) => inside = true,
+            Event::End(TagEnd::Paragraph) if inside => break,
+            Event::Text(t) | Event::Code(t) if inside => text += &t,
+            Event::SoftBreak | Event::HardBreak if inside => text.push(' '),
+            _ => {}
+        }
+    }
+    let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if text.is_empty() {
+        return None;
+    }
+    if text.chars().count() <= max {
+        return Some(text);
+    }
+    let cut: String = text.chars().take(max).collect();
+    let cut = cut.rsplit_once(' ').map_or(cut.as_str(), |(head, _)| head);
+    Some(format!("{}…", cut.trim_end_matches([',', ';', ':', '.'])))
+}
+
 /// Escape text for HTML and XML content and attributes.
 fn escape(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
@@ -454,6 +487,7 @@ mod tests {
         let p = parse_post("2026-09-12-a.md", "---\ntitle: A\n---\nhi\n").unwrap();
         assert_eq!((p.date.as_str(), p.title.as_str()), ("2026-09-12", "A"));
         assert_eq!(p.summary, None);
+        assert_eq!(p.description, "hi");
         let p = parse_post(
             "2026-09-12-a.md",
             "---\r\ntitle: \"A: b\"\r\ndate: 2020-01-02\r\nsummary: 's'\r\n---\r\nhi",
@@ -477,6 +511,18 @@ mod tests {
         ] {
             assert!(parse_post("2026-09-12-a.md", text).is_err(), "{text:?}");
         }
+    }
+
+    #[test]
+    fn excerpts() {
+        assert_eq!(
+            excerpt("# H\n\nOne *two*\n`x`.\n\nNext", 160).unwrap(),
+            "One two x."
+        );
+        assert_eq!(excerpt("aaa bbb ccc", 9).unwrap(), "aaa bbb…");
+        assert_eq!(excerpt("aaa, bbb", 6).unwrap(), "aaa…");
+        assert_eq!(excerpt("üüüü", 2).unwrap(), "üü…");
+        assert_eq!(excerpt("# Only a heading\n", 160), None);
     }
 
     #[test]
@@ -512,6 +558,8 @@ mod tests {
         let post = body(&s, "/posts/new");
         assert!(post.contains("<h1>New</h1>") && post.contains("<h2>Hi</h2>"));
         assert!(post.contains("<title>New — massless</title>"));
+        assert!(post.contains("content=\"Fresh &amp; new\""));
+        assert!(body(&s, "/posts/old").contains("content=\"old\""));
         let feed = body(&s, "/feed.xml");
         assert!(feed.contains("<updated>2026-02-01T00:00:00Z</updated>"));
         assert!(feed.contains("&lt;h2&gt;Hi&lt;/h2&gt;"));
@@ -534,6 +582,8 @@ mod tests {
             assert_eq!(p.content_type, want, "{}", p.path);
         }
         assert!(body(&s, "/feed.xml").contains("href=\"https://example.org/posts/"));
+        // Keep pages small: the index stays well under 10 kB.
+        assert!(body(&s, "/").len() < 8 * 1024);
     }
 
     #[test]

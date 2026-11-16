@@ -120,7 +120,7 @@ Do exactly one step per session, in order. Each step is about 15–30 minutes.
 - [x] **4. HTTP semantics.** Build-time gzip + brotli variants, strong ETags,
   Accept-Encoding negotiation, If-None-Match → 304, HEAD, Cache-Control,
   Vary, security headers. Unit tests for negotiation and ETag/304.
-- [ ] **5. Page design.** One small inlined CSS: typography, dark mode,
+- [x] **5. Page design.** One small inlined CSS: typography, dark mode,
   mobile layout. Proper `<head>` (charset, viewport, title, description,
   feed link). Check page sizes (aim for an index well under 10 kB
   uncompressed).
@@ -161,6 +161,9 @@ Do exactly one step per session, in order. Each step is about 15–30 minutes.
 - `with_chunked_threshold(usize::MAX)`: always `Content-Length`, never chunked; `Server: massless` replaces tiny_http's default.
 - 404 is compressed and gets Vary + `no-cache` but no ETag/304; 301 and 405 are uncompressed with no caching headers.
 - CSP: `default-src 'none'; style-src 'unsafe-inline'; img-src * data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`, on every response.
+- Page description: frontmatter `summary`, else the first paragraph's plain text cut at a word boundary to 160 chars + "…"; index uses `SITE_DESCRIPTION`.
+- CSS is hand-written compact (one rule per line) in `templates/style.css`, no build-time minifier; colors via custom properties, dark mode overrides them.
+- `<link rel="icon" href="data:,">` stops browsers from requesting `/favicon.ico` (a 404) on every page; CSP already allows `data:` images.
 
 ## Notes
 
@@ -187,6 +190,9 @@ Do exactly one step per session, in order. Each step is about 15–30 minutes.
 - `build.rs` writes identity, `-gz` (zopfli) and `-br` variants per page (kept only if smaller) and strong ETags into the generated table; `src/http.rs` does negotiation, 304, Cache-Control, Vary and security headers. 25 unit tests total.
 - Sizes (identity / gzip / br): index 626 / 383 / 238 B, post 6847 / 3102 / 2386 B, feed 6948 / 3056 / 2395 B, 404 581 / 370 / 211 B.
 - By hand with curl: br/gzip/identity picked correctly, gzip decodes back to the identity body (no brotli CLI here to decode br by hand), 304 with `If-None-Match`, HEAD, 404, 301, 405. A keep-alive connection stays in sync after a 304 and a HEAD (bodies are not sent). `cargo tree -e normal` still shows only tiny_http. Release binary: 602 kB.
+### Step 5
+- `templates/style.css`: system font stack, 68ch measure, 1.65 line height, light/dark palettes via `prefers-color-scheme`, fluid padding, styles for code, tables (scroll on narrow screens), blockquotes, footnotes and the index list. Layout gets a footer with the feed link and an empty data: favicon.
+- Sizes (identity / gzip / br): index 2330 / 1136 / 903 B, post 8683 / 3862 / 3087 B, 404 2274 / 1113 / 863 B; a test keeps the index under 8 kB. No browser is installed here, so the look was not checked visually. Release binary: 611 kB.
 
 ## Report
 
