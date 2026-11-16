@@ -5,9 +5,8 @@ use std::sync::mpsc::{Receiver, Sender};
 
 /// A `Reader` that reads exactly the number of bytes from a sub-reader.
 ///
-/// If the limit is reached, it returns EOF. If the limit is not reached
-/// when the destructor is called, the remaining bytes will be read and
-/// thrown away.
+/// If the limit is reached, it returns EOF. Patched: if the limit is not
+/// reached when the destructor is called, the remaining bytes are left unread.
 pub struct EqualReader<R>
 where
     R: Read,
@@ -63,26 +62,13 @@ impl<R> Drop for EqualReader<R>
 where
     R: Read,
 {
+    // Patched: no longer reads and discards the rest of the body. That
+    // allocated a buffer of the client's claimed `Content-Length` (a huge
+    // value aborted the process) and could block a worker thread on a slow
+    // client. Instead, the connection is closed after any request with a
+    // body (see `ClientConnection`).
     fn drop(&mut self) {
-        let mut remaining_to_read = self.size;
-
-        while remaining_to_read > 0 {
-            let mut buf = vec![0; remaining_to_read];
-
-            match self.reader.read(&mut buf) {
-                Err(e) => {
-                    self.last_read_signal.send(Err(e)).ok();
-                    break;
-                }
-                Ok(0) => {
-                    self.last_read_signal.send(Ok(())).ok();
-                    break;
-                }
-                Ok(other) => {
-                    remaining_to_read -= other;
-                }
-            }
-        }
+        self.last_read_signal.send(Ok(())).ok();
     }
 }
 
@@ -126,6 +112,6 @@ mod tests {
 
         let mut string = String::new();
         org_reader.read_to_string(&mut string).unwrap();
-        assert_eq!(string, " world");
+        assert_eq!(string, "ello world");
     }
 }

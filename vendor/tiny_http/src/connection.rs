@@ -5,6 +5,7 @@ use std::os::unix::net as unix_net;
 use std::{
     net::{Shutdown, SocketAddr, TcpListener, TcpStream, ToSocketAddrs},
     path::PathBuf,
+    time::Duration,
 };
 
 /// Unified listener. Either a [`TcpListener`] or [`std::os::unix::net::UnixListener`]
@@ -92,6 +93,16 @@ impl Connection {
             Self::Tcp(s) => s.shutdown(how),
             #[cfg(unix)]
             Self::Unix(s) => s.shutdown(how),
+        }
+    }
+
+    /// Patched: per-syscall read and write timeouts, so a silent or slow
+    /// peer can't block a thread forever.
+    pub(crate) fn set_timeouts(&self, t: Option<Duration>) -> std::io::Result<()> {
+        match self {
+            Self::Tcp(s) => s.set_read_timeout(t).and(s.set_write_timeout(t)),
+            #[cfg(unix)]
+            Self::Unix(s) => s.set_read_timeout(t).and(s.set_write_timeout(t)),
         }
     }
 

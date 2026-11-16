@@ -6,9 +6,16 @@ use std::io::{BufReader, BufWriter, ErrorKind, Read};
 
 use std::net::SocketAddr;
 use std::str::FromStr;
+use std::time::{Duration, Instant};
 
 use crate::common::{HTTPVersion, Method};
+use crate::util::refined_tcp_stream::Deadline;
 use crate::util::RefinedTcpStream;
+
+/// Patched: most bytes a request line plus headers may take.
+const MAX_HEAD_BYTES: usize = 16 * 1024;
+/// Patched: most header lines a request may have.
+const MAX_HEADERS: usize = 100;
 use crate::util::{SequentialReader, SequentialReaderBuilder, SequentialWriterBuilder};
 use crate::Request;
 
@@ -34,6 +41,11 @@ pub struct ClientConnection {
 
     // true if the connection goes through SSL
     secure: bool,
+
+    // Patched: time allowed to receive each request's head (also the
+    // keep-alive idle timeout), and the deadline the read half enforces.
+    timeout: Option<Duration>,
+    deadline: Deadline,
 }
 
 /// Error that can happen when reading a request.
@@ -41,6 +53,9 @@ pub struct ClientConnection {
 enum ReadError {
     WrongRequestLine,
     WrongHeader(HTTPVersion),
+    /// Patched: answer with this status and close, e.g. request line (414)
+    /// or headers (431) over the limits
+    Reject(u16),
     /// the client sent an unrecognized `Expect` header
     ExpectationFailed(HTTPVersion),
     ReadIoError(IoError),
@@ -51,9 +66,11 @@ impl ClientConnection {
     pub fn new(
         write_socket: RefinedTcpStream,
         mut read_socket: RefinedTcpStream,
+        timeout: Option<Duration>,
     ) -> ClientConnection {
         let remote_addr = read_socket.peer_addr();
         let secure = read_socket.secure();
+        let deadline = read_socket.deadline();
 
         let mut source = SequentialReaderBuilder::new(BufReader::with_capacity(1024, read_socket));
         let first_header = source.next().unwrap();
@@ -65,6 +82,8 @@ impl ClientConnection {
             next_header_source: first_header,
             no_more_requests: false,
             secure,
+            timeout,
+            deadline,
         }
     }
 
@@ -77,7 +96,10 @@ impl ClientConnection {
     ///
     /// Reads until `CRLF` is reached. The next read will start
     ///  at the first byte of the new line.
-    fn read_next_line(&mut self) -> IoResult<AsciiString> {
+    ///
+    /// Patched: each byte read uses up one of `budget`; when it runs out,
+    /// fails with `Reject(status)`. A non-ASCII line fails with `Reject(400)`.
+    fn read_next_line(&mut self, budget: &mut usize, status: u16) -> Result<AsciiString, ReadError> {
         let mut buf = Vec::new();
         let mut prev_byte_was_cr = false;
 
@@ -85,14 +107,23 @@ impl ClientConnection {
             let byte = self.next_header_source.by_ref().bytes().next();
 
             let byte = match byte {
-                Some(b) => b?,
-                None => return Err(IoError::new(ErrorKind::ConnectionAborted, "Unexpected EOF")),
+                Some(b) => b.map_err(ReadError::ReadIoError)?,
+                None => {
+                    return Err(ReadError::ReadIoError(IoError::new(
+                        ErrorKind::ConnectionAborted,
+                        "Unexpected EOF",
+                    )))
+                }
             };
+
+            if *budget == 0 {
+                return Err(ReadError::Reject(status));
+            }
+            *budget -= 1;
 
             if byte == b'\n' && prev_byte_was_cr {
                 buf.pop(); // removing the '\r'
-                return AsciiString::from_ascii(buf)
-                    .map_err(|_| IoError::new(ErrorKind::InvalidInput, "Header is not in ASCII"));
+                return AsciiString::from_ascii(buf).map_err(|_| ReadError::Reject(400));
             }
 
             prev_byte_was_cr = byte == b'\r';
@@ -104,25 +135,40 @@ impl ClientConnection {
     /// Reads a request from the stream.
     /// Blocks until the header has been read.
     fn read(&mut self) -> Result<Request, ReadError> {
+        // Patched: the whole head must arrive within `timeout`.
+        self.deadline
+            .set(self.timeout.and_then(|t| Instant::now().checked_add(t)));
+        let mut budget = MAX_HEAD_BYTES;
+
         let (method, path, version, headers) = {
             // reading the request line
             let (method, path, version) = {
-                let line = self.read_next_line().map_err(ReadError::ReadIoError)?;
+                let line = self.read_next_line(&mut budget, 414)?;
 
                 parse_request_line(
                     line.as_str().trim(), // TODO: remove this conversion
                 )?
             };
 
+            // Patched: moved here from `next()`, where the 505 was written
+            // while the request still held the connection's writer, which
+            // deadlocked the connection thread forever.
+            if version > (1, 1) {
+                return Err(ReadError::Reject(505));
+            }
+
             // getting all headers
             let headers = {
                 let mut headers = Vec::new();
                 loop {
-                    let line = self.read_next_line().map_err(ReadError::ReadIoError)?;
+                    let line = self.read_next_line(&mut budget, 431)?;
 
                     if line.is_empty() {
                         break;
                     };
+                    if headers.len() == MAX_HEADERS {
+                        return Err(ReadError::Reject(431));
+                    }
                     headers.push(match FromStr::from_str(line.as_str().trim()) {
                         // TODO: remove this conversion
                         Ok(h) => h,
@@ -150,7 +196,8 @@ impl ClientConnection {
             path,
             version.clone(),
             headers,
-            *self.remote_addr.as_ref().unwrap(),
+            // Patched: was `unwrap()`, which panicked if `peer_addr` failed.
+            self.remote_addr.as_ref().ok().copied().flatten(),
             data_source,
             writer,
         )
@@ -203,6 +250,15 @@ impl Iterator for ClientConnection {
                                  // se we have to close
                 }
 
+                Err(ReadError::Reject(status)) => {
+                    let writer = self.sink.next().unwrap();
+                    let response = Response::new_empty(StatusCode(status));
+                    response
+                        .raw_print(writer, HTTPVersion(1, 1), &[], false, None)
+                        .ok();
+                    return None; // we may have stopped mid-request, so we have to close
+                }
+
                 Err(ReadError::ReadIoError(ref err)) if err.kind() == ErrorKind::TimedOut => {
                     // request timeout
                     let writer = self.sink.next().unwrap();
@@ -225,19 +281,6 @@ impl Iterator for ClientConnection {
                 Ok(rq) => rq,
             };
 
-            // checking HTTP version
-            if *rq.http_version() > (1, 1) {
-                let writer = self.sink.next().unwrap();
-                let response = Response::from_string(
-                    "This server only supports HTTP versions 1.0 and 1.1".to_owned(),
-                )
-                .with_status_code(StatusCode(505));
-                response
-                    .raw_print(writer, HTTPVersion(1, 1), &[], false, None)
-                    .ok();
-                continue;
-            }
-
             // updating the status of the connection
             let connection_header = rq
                 .headers()
@@ -258,6 +301,17 @@ impl Iterator for ClientConnection {
                 None if *rq.http_version() == HTTPVersion(1, 0) => self.no_more_requests = true,
                 _ => (),
             };
+
+            // Patched: a request with a body is the connection's last one.
+            // Bodies are never drained (see `EqualReader`), so their bytes
+            // can't be misread as the next request.
+            let has_body = rq.headers().iter().any(|h| {
+                h.field.equiv("Transfer-Encoding")
+                    || (h.field.equiv("Content-Length") && h.value.as_str().trim() != "0")
+            });
+            if has_body {
+                self.no_more_requests = true;
+            }
 
             // returning the request
             return Some(rq);

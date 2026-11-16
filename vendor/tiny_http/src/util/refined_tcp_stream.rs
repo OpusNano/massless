@@ -1,6 +1,8 @@
 use std::io::Result as IoResult;
-use std::io::{Read, Write};
+use std::io::{Error as IoError, ErrorKind, Read, Write};
 use std::net::{Shutdown, SocketAddr};
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use crate::connection::Connection;
 #[cfg(any(feature = "ssl-openssl", feature = "ssl-rustls"))]
@@ -12,13 +14,34 @@ pub(crate) enum Stream {
     Https(SslStream),
 }
 
-impl Clone for Stream {
-    fn clone(&self) -> Self {
+impl Stream {
+    // Patched: was `Clone` with `try_clone().unwrap()`, which panicked when
+    // out of file descriptors.
+    fn try_clone(&self) -> IoResult<Self> {
         match self {
-            Stream::Http(tcp_stream) => Stream::Http(tcp_stream.try_clone().unwrap()),
+            Stream::Http(tcp_stream) => tcp_stream.try_clone().map(Stream::Http),
             #[cfg(any(feature = "ssl-openssl", feature = "ssl-rustls"))]
-            Stream::Https(ssl_stream) => Stream::Https(ssl_stream.clone()),
+            Stream::Https(ssl_stream) => Ok(Stream::Https(ssl_stream.clone())),
         }
+    }
+}
+
+/// Patched: a read deadline shared by a connection's read half and its
+/// `ClientConnection`. Once it has passed, reads fail like a socket timeout,
+/// so a client that sends a request slowly (byte by byte, each within the
+/// socket timeout) still can't hold the connection open.
+#[derive(Clone, Default)]
+pub(crate) struct Deadline(Arc<Mutex<Option<Instant>>>);
+
+impl Deadline {
+    pub(crate) fn set(&self, at: Option<Instant>) {
+        if let Ok(mut d) = self.0.lock() {
+            *d = at;
+        }
+    }
+
+    fn passed(&self) -> bool {
+        matches!(self.0.lock().map(|d| *d), Ok(Some(at)) if Instant::now() >= at)
     }
 }
 
@@ -86,30 +109,38 @@ pub struct RefinedTcpStream {
     stream: Stream,
     close_read: bool,
     close_write: bool,
+    deadline: Deadline,
 }
 
 impl RefinedTcpStream {
-    pub(crate) fn new<S>(stream: S) -> (RefinedTcpStream, RefinedTcpStream)
+    pub(crate) fn new<S>(stream: S) -> IoResult<(RefinedTcpStream, RefinedTcpStream)>
     where
         S: Into<Stream>,
     {
         let stream: Stream = stream.into();
 
-        let (read, write) = (stream.clone(), stream);
+        let (read, write) = (stream.try_clone()?, stream);
 
         let read = RefinedTcpStream {
             stream: read,
             close_read: true,
             close_write: false,
+            deadline: Deadline::default(),
         };
 
         let write = RefinedTcpStream {
             stream: write,
             close_read: false,
             close_write: true,
+            deadline: Deadline::default(),
         };
 
-        (read, write)
+        Ok((read, write))
+    }
+
+    /// Patched: the deadline checked before every read from this stream.
+    pub(crate) fn deadline(&self) -> Deadline {
+        self.deadline.clone()
     }
 
     /// Returns true if this struct wraps around a secure connection.
@@ -137,6 +168,9 @@ impl Drop for RefinedTcpStream {
 
 impl Read for RefinedTcpStream {
     fn read(&mut self, buf: &mut [u8]) -> IoResult<usize> {
+        if self.deadline.passed() {
+            return Err(IoError::new(ErrorKind::WouldBlock, "read deadline passed"));
+        }
         self.stream.read(buf)
     }
 }

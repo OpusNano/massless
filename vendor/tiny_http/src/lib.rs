@@ -90,6 +90,8 @@
 #![forbid(unsafe_code)]
 #![deny(rust_2018_idioms)]
 #![allow(clippy::match_like_matches_macro)]
+// Patched: silence upstream warnings from newer compilers.
+#![allow(dead_code, unused_imports)]
 
 #[cfg(any(feature = "ssl-openssl", feature = "ssl-rustls"))]
 use zeroize::Zeroizing;
@@ -99,8 +101,8 @@ use std::io::Error as IoError;
 use std::io::ErrorKind as IoErrorKind;
 use std::io::Result as IoResult;
 use std::net::{Shutdown, TcpStream, ToSocketAddrs};
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering::Relaxed;
+use std::sync::atomic::Ordering::{AcqRel, Acquire, Relaxed};
+use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::thread;
@@ -177,6 +179,30 @@ pub struct ServerConfig {
 
     /// If `Some`, then the server will use SSL to encode the communications.
     pub ssl: Option<SslConfig>,
+
+    /// Patched: timeouts and connection limit.
+    pub limits: Limits,
+}
+
+/// Patched: resource limits for a server.
+#[derive(Debug, Clone)]
+pub struct Limits {
+    /// Socket read/write timeout, and the time allowed to receive each
+    /// request's line and headers (which is also the keep-alive idle
+    /// timeout). `None` waits forever.
+    pub timeout: Option<Duration>,
+    /// Most connections open at once (each uses a thread and two file
+    /// descriptors). Further clients wait in the listen backlog.
+    pub max_connections: usize,
+}
+
+impl Default for Limits {
+    fn default() -> Self {
+        Limits {
+            timeout: Some(Duration::from_secs(10)),
+            max_connections: 500,
+        }
+    }
 }
 
 /// Configuration of the server for SSL.
@@ -195,9 +221,21 @@ impl Server {
     where
         A: ToSocketAddrs,
     {
+        Server::http_with_limits(addr, Limits::default())
+    }
+
+    /// Patched: like `http`, with explicit limits.
+    pub fn http_with_limits<A>(
+        addr: A,
+        limits: Limits,
+    ) -> Result<Server, Box<dyn Error + Send + Sync + 'static>>
+    where
+        A: ToSocketAddrs,
+    {
         Server::new(ServerConfig {
             addr: ConfigListenAddr::from_socket_addrs(addr)?,
             ssl: None,
+            limits,
         })
     }
 
@@ -214,6 +252,7 @@ impl Server {
         Server::new(ServerConfig {
             addr: ConfigListenAddr::from_socket_addrs(addr)?,
             ssl: Some(config),
+            limits: Limits::default(),
         })
     }
 
@@ -226,13 +265,14 @@ impl Server {
         Server::new(ServerConfig {
             addr: ConfigListenAddr::unix_from_path(path),
             ssl: None,
+            limits: Limits::default(),
         })
     }
 
     /// Builds a new server that listens on the specified address.
     pub fn new(config: ServerConfig) -> Result<Server, Box<dyn Error + Send + Sync + 'static>> {
         let listener = config.addr.bind()?;
-        Self::from_listener(listener, config.ssl)
+        Self::from_listener_with_limits(listener, config.ssl, config.limits)
     }
 
     /// Builds a new server using the specified TCP listener.
@@ -242,6 +282,15 @@ impl Server {
     pub fn from_listener<L: Into<Listener>>(
         listener: L,
         ssl_config: Option<SslConfig>,
+    ) -> Result<Server, Box<dyn Error + Send + Sync + 'static>> {
+        Self::from_listener_with_limits(listener, ssl_config, Limits::default())
+    }
+
+    /// Patched: like `from_listener`, with explicit limits.
+    pub fn from_listener_with_limits<L: Into<Listener>>(
+        listener: L,
+        ssl_config: Option<SslConfig>,
+        limits: Limits,
     ) -> Result<Server, Box<dyn Error + Send + Sync + 'static>> {
         let listener = listener.into();
         // building the "close" variable
@@ -290,60 +339,73 @@ impl Server {
             let tasks_pool = util::TaskPool::new();
 
             log::debug!("Running accept thread");
+            // Patched: number of open connections (see `Limits`).
+            let open = Arc::new(AtomicUsize::new(0));
             while !inside_close_trigger.load(Relaxed) {
-                let new_client = match server.accept() {
-                    Ok((sock, _)) => {
-                        use util::RefinedTcpStream;
-                        let (read_closable, write_closable) = match ssl {
-                            None => RefinedTcpStream::new(sock),
-                            #[cfg(any(feature = "ssl-openssl", feature = "ssl-rustls"))]
-                            Some(ref ssl) => {
-                                // trying to apply SSL over the connection
-                                // if an error occurs, we just close the socket and resume listening
-                                let sock = match ssl.accept(sock) {
-                                    Ok(s) => s,
-                                    Err(_) => continue,
-                                };
+                // Patched: wait for a free slot; new clients queue in the
+                // kernel's listen backlog meanwhile.
+                if open.load(Acquire) >= limits.max_connections {
+                    thread::sleep(Duration::from_millis(5));
+                    continue;
+                }
 
-                                RefinedTcpStream::new(sock)
-                            }
-                            #[cfg(not(any(feature = "ssl-openssl", feature = "ssl-rustls")))]
-                            Some(ref _ssl) => unreachable!(),
-                        };
-
-                        Ok(ClientConnection::new(write_closable, read_closable))
-                    }
-                    Err(e) => Err(e),
-                };
-
-                match new_client {
-                    Ok(client) => {
-                        let messages = inside_messages.clone();
-                        let mut client = Some(client);
-                        tasks_pool.spawn(Box::new(move || {
-                            if let Some(client) = client.take() {
-                                // Synchronization is needed for HTTPS requests to avoid a deadlock
-                                if client.secure() {
-                                    let (sender, receiver) = mpsc::channel();
-                                    for rq in client {
-                                        messages.push(rq.with_notify_sender(sender.clone()).into());
-                                        receiver.recv().unwrap();
-                                    }
-                                } else {
-                                    for rq in client {
-                                        messages.push(rq.into());
-                                    }
-                                }
-                            }
-                        }));
-                    }
-
+                let sock = match server.accept() {
+                    Ok((sock, _)) => sock,
+                    // Patched: was `break`, which stopped accepting forever
+                    // on the first error (e.g. EMFILE, ECONNABORTED).
                     Err(e) => {
                         log::error!("Error accepting new client: {}", e);
-                        inside_messages.push(e.into());
-                        break;
+                        thread::sleep(Duration::from_millis(10));
+                        continue;
                     }
+                };
+                if sock.set_timeouts(limits.timeout).is_err() {
+                    continue;
                 }
+
+                use util::RefinedTcpStream;
+                let streams = match ssl {
+                    None => RefinedTcpStream::new(sock),
+                    #[cfg(any(feature = "ssl-openssl", feature = "ssl-rustls"))]
+                    Some(ref ssl) => {
+                        // trying to apply SSL over the connection
+                        // if an error occurs, we just close the socket and resume listening
+                        match ssl.accept(sock) {
+                            Ok(s) => RefinedTcpStream::new(s),
+                            Err(_) => continue,
+                        }
+                    }
+                    #[cfg(not(any(feature = "ssl-openssl", feature = "ssl-rustls")))]
+                    Some(ref _ssl) => unreachable!(),
+                };
+                // Patched: was a panic when out of file descriptors.
+                let (read_closable, write_closable) = match streams {
+                    Ok(s) => s,
+                    Err(_) => continue,
+                };
+                let client = ClientConnection::new(write_closable, read_closable, limits.timeout);
+
+                open.fetch_add(1, AcqRel);
+                let open = open.clone();
+                let messages = inside_messages.clone();
+                let mut client = Some(client);
+                tasks_pool.spawn(Box::new(move || {
+                    if let Some(client) = client.take() {
+                        // Synchronization is needed for HTTPS requests to avoid a deadlock
+                        if client.secure() {
+                            let (sender, receiver) = mpsc::channel();
+                            for rq in client {
+                                messages.push(rq.with_notify_sender(sender.clone()).into());
+                                receiver.recv().unwrap();
+                            }
+                        } else {
+                            for rq in client {
+                                messages.push(rq.into());
+                            }
+                        }
+                        open.fetch_sub(1, AcqRel);
+                    }
+                }));
             }
             log::debug!("Terminating accept thread");
         });
