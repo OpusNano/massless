@@ -108,7 +108,7 @@ Do exactly one step per session, in order. Each step is about 15–30 minutes.
   skeleton: `Cargo.toml` (edition 2024, release profile as above),
   `src/main.rs`, `Cargo.lock`, and `.cargo/config.toml` only if needed for
   the CPU baseline.
-- [ ] **2. Static server.** tiny_http worker pool, `LISTEN`/`THREADS`, a static
+- [x] **2. Static server.** tiny_http worker pool, `LISTEN`/`THREADS`, a static
   route table with a couple of hardcoded embedded responses, 404, 405, HEAD.
   Unit tests for routing. Check by hand that a held-open keep-alive
   connection doesn't block a second client.
@@ -143,6 +143,9 @@ Do exactly one step per session, in order. Each step is about 15–30 minutes.
 (Record technical decisions made during unattended sessions here, one line each.)
 
 - No `.cargo/config.toml`: rustc's default `x86_64-unknown-linux-gnu` baseline is x86-64 (v1), already within the "v2 at most" limit.
+- tiny_http 0.12 with default features off (no TLS); it suppresses HEAD bodies itself, so routing treats HEAD like GET.
+- Routing lives in pure `src/routes.rs` (`route(Method, url) -> Reply`) so it is unit-testable without sockets; main.rs only maps it to tiny_http.
+- Bad `THREADS` value exits with an error instead of silently using the default.
 
 ## Notes
 
@@ -151,6 +154,13 @@ Do exactly one step per session, in order. Each step is about 15–30 minutes.
 ### Step 1
 - Removed all Zig code/tooling, `public/`, Dockerfile and Zig `.gitignore` entries; README is a stub.
 - Cargo skeleton (edition 2024, release profile per spec, no deps). Toolchain: rustc 1.100.0. Empty release binary: 289 kB.
+
+### Step 2
+- Worker pool of `THREADS` threads on a shared `Arc<Server>` calling `recv()`; `LISTEN`/`THREADS` env; prints bound address.
+- Hardcoded routes `/`, `/hello`; 404, 405 (+ `Allow: GET, HEAD`), HEAD; query strings ignored. 5 routing unit tests.
+- Manual check, `THREADS=2`: 3 held-open keep-alive connections, 4 more curl requests still answered in <1 ms each. tiny_http reads each connection on its own internal pool thread (that pool grows as needed), so idle connections don't use up our workers.
+- A truncated request (`GET / HTTP/1.1\r\nHo`) currently waits forever on its connection (others are unaffected); timeouts are step 6.
+- Release binary: 563 kB.
 
 ## Report
 
